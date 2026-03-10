@@ -803,7 +803,8 @@ function handleTap(e) {
 }
 
 canvas.addEventListener('click', handleTap);
-canvas.addEventListener('touchend', handleTap);
+canvas.addEventListener('touchstart', function(e) { e.preventDefault(); }, { passive: false });
+canvas.addEventListener('touchend', handleTap, { passive: false });
 
 function restartGame() {
   DILEMMAS = selectDilemmas(); // re-roll dilemmas each playthrough
