@@ -1,0 +1,2002 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Trolley Problem: The Game</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #111; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; }
+  canvas { max-width: 100vw; max-height: 100vh; object-fit: contain; }
+</style>
+</head>
+<body>
+<canvas id="game" width="960" height="540"></canvas>
+<script>
+// ============================================================
+// CONSTANTS
+// ============================================================
+const W = 960, H = 540;
+
+// Pseudo-3D projection
+const HORIZON_Y = 180;
+const CAM_H = 70;
+const FOCAL = 150;
+const DRAW_DIST = 1500;
+const MIN_Z = 8;
+
+// Track geometry (world units)
+const FORK_SPREAD = 100;
+const GRAVEL_HW = 22;   // gravel half-width per track
+const GAUGE_HW = 7;     // rail gauge half-width
+
+// Segment lengths
+const STRAIGHT_LEN = 400;
+const SPLIT_LEN = 250;
+const PATHS_LEN = 400;
+const MERGE_LEN = 150;
+
+// Colors
+const COL_TROLLEY   = '#c0392b';
+const COL_TROLLEY_DK = '#922b21';
+
+// ============================================================
+// DILEMMAS — 100 scenarios, classic → absurd
+// Each has per-side ethical framework tags for summary profiling
+// ============================================================
+const ALL_DILEMMAS = [
+  // ===================== 1-18: ORIGINAL SET =====================
+  // --- Classic tier ---
+  { id:1, tier:'classic', label:'1 person vs 5 people',
+    left:{count:1,type:'person',desc:'1 person'}, right:{count:5,type:'person',desc:'5 people'},
+    tags:{left:'utilitarian',right:'evil'},
+    commentary:{left:'One life for five. The math checks out, you monster.',right:'You chose the bigger pile. Bold strategy, Cotton.'},
+    indecision:'Lightning does not negotiate.' },
+  { id:2, tier:'classic', label:'1 child vs 3 elderly',
+    left:{count:1,type:'child',desc:'1 child'}, right:{count:3,type:'elderly',desc:'3 elderly'},
+    tags:{left:'utilitarian',right:'deontological'},
+    commentary:{left:'Potential years saved: approximately a lot.',right:'They lived full lives. You decided that was enough.'},
+    indecision:'Youth and age, both gone. Efficient.' },
+  { id:3, tier:'classic', label:'1 dog vs 1 person who hates dogs',
+    left:{count:1,type:'dog',desc:'1 golden retriever'}, right:{count:1,type:'person',desc:'1 dog hater'},
+    tags:{left:'deontological',right:'evil'},
+    commentary:{left:'You sacrificed man\'s best friend. The internet will not forgive you.',right:'Poetic justice, some would say. The dog lobby approves.'},
+    indecision:'Both gone. The internet is conflicted.' },
+  // --- Personal tier ---
+  { id:4, tier:'personal', label:'Your best friend vs 2 strangers',
+    left:{count:1,type:'person',desc:'Your best friend'}, right:{count:2,type:'person',desc:'2 strangers'},
+    tags:{left:'utilitarian',right:'deontological'},
+    commentary:{left:'Friendship ended with best friend. Literally.',right:'You chose loyalty over logic. Kant would nod approvingly.'},
+    indecision:'Your best friend AND two strangers. Triple funeral.' },
+  { id:5, tier:'personal', label:'1 doctor who cures cancer vs 5 felons',
+    left:{count:1,type:'person',desc:'1 miracle doctor'}, right:{count:5,type:'person',desc:'5 convicted felons'},
+    tags:{left:'deontological',right:'utilitarian'},
+    commentary:{left:'Cancer wins today. Hope you\'re proud.',right:'The justice system just got a lot simpler.'},
+    indecision:'Cancer wins AND crime wins. Nobody wins.' },
+  { id:6, tier:'animals', label:'3 dogs vs 1 child',
+    left:{count:3,type:'dog',desc:'3 puppies'}, right:{count:1,type:'child',desc:'1 toddler'},
+    tags:{left:'deontological',right:'evil'},
+    commentary:{left:'Three puppies. You puppy murderer.',right:'You chose dogs over a human child. Bold move.'},
+    indecision:'Puppies AND a toddler. Monster.' },
+  // --- Utilitarian tier ---
+  { id:7, tier:'classic', label:'An empty track vs 5 people (but you must switch)',
+    left:{count:0,type:'person',desc:'Nobody'}, right:{count:5,type:'person',desc:'5 bystanders'},
+    tags:{left:'utilitarian',right:'evil'},
+    commentary:{left:'Congratulations, you passed the easiest moral test ever.',right:'You... chose to hit people when the other track was EMPTY?'},
+    indecision:'The track was EMPTY and you still failed.' },
+  { id:8, tier:'classic', label:'1 elderly philosopher vs 5 children',
+    left:{count:1,type:'philosopher',desc:'1 philosopher'}, right:{count:5,type:'child',desc:'5 children'},
+    tags:{left:'utilitarian',right:'evil'},
+    commentary:{left:'The trolley problem expert died as they lived — on the tracks.',right:'Five fewer mouths to feed at the philosophy department picnic.'},
+    indecision:'The philosopher AND the children. A real lesson in ethics.' },
+  { id:9, tier:'classic', label:'2 people vs 2 people',
+    left:{count:2,type:'person',desc:'2 people'}, right:{count:2,type:'person',desc:'2 people'},
+    tags:{left:'contractualist',right:'contractualist'},
+    commentary:{left:'Equal stakes, but you still chose. Why left?',right:'Equal stakes, but you still chose. Why right?'},
+    indecision:'Four dead. You made equality literal.' },
+  // --- Absurd tier ---
+  { id:10, tier:'absurd', label:'1 trolley ethicist vs 1 trolley engineer',
+    left:{count:1,type:'philosopher',desc:'1 trolley ethicist'}, right:{count:1,type:'person',desc:'1 trolley engineer'},
+    tags:{left:'utilitarian',right:'deontological'},
+    commentary:{left:'The ethicist finally got empirical data.',right:'Without engineers, who will build the trolleys? Think ahead.'},
+    indecision:'Theory AND practice, both dead.' },
+  { id:11, tier:'absurd', label:'10 elderly vs 1 dog',
+    left:{count:10,type:'elderly',desc:'10 retirees'}, right:{count:1,type:'dog',desc:'1 corgi'},
+    tags:{left:'evil',right:'utilitarian'},
+    commentary:{left:'Bingo night will never be the same.',right:'You chose ten humans over one corgi. The queen would be disappointed.'},
+    indecision:'Ten retirees AND a corgi. Bingo night is cancelled forever.' },
+  { id:12, tier:'personal', label:'1 person you hate vs 1 person you love',
+    left:{count:1,type:'person',desc:'Your nemesis'}, right:{count:1,type:'person',desc:'Your soulmate'},
+    tags:{left:'deontological',right:'evil'},
+    commentary:{left:'Revenge is a dish best served by trolley.',right:'You... you monster. Actually, genuinely, what is wrong with you.'},
+    indecision:'Nemesis AND soulmate. Your therapist will hear about this.' },
+  // --- Meta tier ---
+  { id:13, tier:'meta', label:'Nobody vs Nobody',
+    left:{count:0,type:'person',desc:'Empty track'}, right:{count:0,type:'person',desc:'Empty track'},
+    tags:{left:null,right:null},
+    commentary:{left:'You agonized over nothing. Literally nothing.',right:'You agonized over nothing. Literally nothing.'},
+    indecision:'You agonized over nothing. Literally nothing.' },
+  { id:14, tier:'meta', label:'1 person vs 1 person (identical twins)',
+    left:{count:1,type:'person',desc:'Twin A'}, right:{count:1,type:'person',desc:'Twin B'},
+    tags:{left:'contractualist',right:'contractualist'},
+    commentary:{left:'Twin B sends their regards.',right:'Twin A sends their regards.'},
+    indecision:'Both twins. Their parents will never recover.' },
+  { id:15, tier:'meta', label:'4 philosophers debating the trolley problem vs 1 child',
+    left:{count:4,type:'philosopher',desc:'4 philosophers'}, right:{count:1,type:'child',desc:'1 orphan'},
+    tags:{left:'deontological',right:'utilitarian'},
+    commentary:{left:'Four fewer papers on the trolley problem. A net positive, arguably.',right:'You saved the philosophers so they can keep arguing about this exact scenario.'},
+    indecision:'Philosophers AND an orphan. The paper writes itself. Posthumously.' },
+  // --- Existential tier ---
+  { id:16, tier:'identity', label:'1 clone of you vs the real you',
+    left:{count:1,type:'person',desc:'Your clone'}, right:{count:1,type:'person',desc:'The real you'},
+    tags:{left:'utilitarian',right:'evil'},
+    commentary:{left:'You killed yourself. Or did you? The clone thought it was real too.',right:'Plot twist: you were the clone all along.'},
+    indecision:'Both yous. Existential crisis resolved by annihilation.' },
+  { id:17, tier:'animals', label:'1 person who will invent time travel vs 3 dogs',
+    left:{count:1,type:'person',desc:'1 future inventor'}, right:{count:3,type:'dog',desc:'3 dogs'},
+    tags:{left:'deontological',right:'utilitarian'},
+    commentary:{left:'Timeline collapsed. No paradox though, because no time machine.',right:'Three dogs gone. But the timeline is safe. Worth it?'},
+    indecision:'No time machine AND no dogs. The worst timeline.' },
+  { id:18, tier:'classic', label:'Everyone vs everyone',
+    left:{count:5,type:'person',desc:'5 people'}, right:{count:5,type:'person',desc:'5 people'},
+    tags:{left:'contractualist',right:'contractualist'},
+    commentary:{left:'Five down, five to go... wait, the other five were saved. Lucky them.',right:'Left or right, same carnage. At least you committed.'},
+    indecision:'All ten. You found a way to make it worse.' },
+
+  // ===================== 19-23: CLASSIC NUMBER VARIATIONS =====================
+  { id:19, tier:'classic', label:'2 people vs 10 people',
+    left:{count:2,type:'person',desc:'2 people'}, right:{count:10,type:'person',desc:'10 people'},
+    tags:{left:'utilitarian',right:'evil'},
+    commentary:{left:'Two for ten. Solid math.',right:'You chose the bigger number. On purpose.'},
+    indecision:'Twelve people. You set a record.' },
+  { id:20, tier:'classic', label:'1 person vs 1 person (strangers)',
+    left:{count:1,type:'person',desc:'1 stranger'}, right:{count:1,type:'person',desc:'1 stranger'},
+    tags:{left:'contractualist',right:'contractualist'},
+    commentary:{left:'Equal claims. You just... picked one.',right:'Equal claims. You just... picked one.'},
+    indecision:'Two strangers gone. Symmetry achieved.' },
+  { id:21, tier:'classic', label:'50 people vs 1 baby',
+    left:{count:50,type:'person',desc:'50 people'}, right:{count:1,type:'child',desc:'1 baby'},
+    tags:{left:'deontological',right:'utilitarian'},
+    commentary:{left:'Fifty funerals. But the baby lives.',right:'You saved fifty. The math was brutal but clear.'},
+    indecision:'Fifty-one. That is a LOT of funerals.' },
+  { id:22, tier:'classic', label:'3 people vs 3 people',
+    left:{count:3,type:'person',desc:'3 people'}, right:{count:3,type:'person',desc:'3 people'},
+    tags:{left:'contractualist',right:'contractualist'},
+    commentary:{left:'The cruelest dilemma: no right answer, and you still have to choose.',right:'The cruelest dilemma: no right answer, and you still have to choose.'},
+    indecision:'Six dead. You made a balanced decision.' },
+  { id:23, tier:'classic', label:'1 person vs 100 people',
+    left:{count:1,type:'person',desc:'1 person'}, right:{count:100,type:'person',desc:'100 people'},
+    tags:{left:'utilitarian',right:'evil'},
+    commentary:{left:'One life for a hundred. The math has never been clearer.',right:'This is just mass murder. You know that, right?'},
+    indecision:'A hundred and one. Congratulations on the high score.' },
+
+  // ===================== 24-26: DOING/ALLOWING DISTINCTION =====================
+  { id:24, tier:'personal', label:'Push 1 large person to stop trolley vs 5 people',
+    left:{count:1,type:'person',desc:'1 large person (pushed)'}, right:{count:5,type:'person',desc:'5 bystanders'},
+    tags:{left:'utilitarian',right:'deontological'},
+    commentary:{left:'You used a person as a brake. Kant is spinning in his grave.',right:'Five dead, but your hands are clean. Or are they?'},
+    indecision:'Six dead. Your hands are filthy AND empty.' },
+  { id:25, tier:'personal', label:'Pull the lever yourself vs do nothing',
+    left:{count:1,type:'person',desc:'1 person (you divert)'}, right:{count:5,type:'person',desc:'5 people (you do nothing)'},
+    tags:{left:'utilitarian',right:'deontological'},
+    commentary:{left:'You pulled. One dies. You caused it.',right:'You didn\'t pull. Five died. You allowed it.'},
+    indecision:'Six dead. Doing AND allowing. Impressive.' },
+  { id:26, tier:'personal', label:'1 reckless trespasser vs 5 tied-up victims',
+    left:{count:1,type:'person',desc:'1 reckless trespasser'}, right:{count:5,type:'person',desc:'5 tied-up victims'},
+    tags:{left:'utilitarian',right:'evil'},
+    commentary:{left:'They chose to be there. The five didn\'t.',right:'You killed restrained innocents. Read that sentence again.'},
+    indecision:'The trespasser AND the tied-up victims. Everyone loses.' },
+
+  // ===================== 27-30: CONSENT AND AUTONOMY =====================
+  { id:27, tier:'personal', label:'5 people who want to die vs 1 who wants to live',
+    left:{count:5,type:'person',desc:'5 willing volunteers'}, right:{count:1,type:'person',desc:'1 person clinging to life'},
+    tags:{left:'deontological',right:'evil'},
+    commentary:{left:'You respected their wishes. Uncomfortable, isn\'t it?',right:'They wanted this. You gave it to someone who didn\'t.'},
+    indecision:'Everyone dies. Not what anyone wanted. Except the five.' },
+  { id:28, tier:'personal', label:'1 person who begs you to switch vs 5 silent people',
+    left:{count:1,type:'person',desc:'1 pleading person'}, right:{count:5,type:'person',desc:'5 silent bystanders'},
+    tags:{left:'deontological',right:'utilitarian'},
+    commentary:{left:'Their cries went unanswered. You did the math instead.',right:'Numbers still favor five, no matter how loud one screams.'},
+    indecision:'Six dead. The screaming stopped.' },
+  { id:29, tier:'personal', label:'5 waiver-signers vs 1 non-consenter',
+    left:{count:5,type:'person',desc:'5 waiver-signers'}, right:{count:1,type:'person',desc:'1 non-consenter'},
+    tags:{left:'contractualist',right:'evil'},
+    commentary:{left:'They signed the waiver. Terms and conditions applied.',right:'You killed the only person who didn\'t agree to this.'},
+    indecision:'Waivers voided. All dead.' },
+  { id:30, tier:'meta', label:'1 coin-flip loser vs 5 people',
+    left:{count:1,type:'person',desc:'1 coin-flip loser'}, right:{count:5,type:'person',desc:'5 bystanders'},
+    tags:{left:'contractualist',right:'evil'},
+    commentary:{left:'Fair procedure. Unfair outcome.',right:'You rejected the fair lottery to kill five. Bold.'},
+    indecision:'The coin lands on its edge. Everyone dies.' },
+
+  // ===================== 31-37: ANIMALS AND SPECIES =====================
+  { id:31, tier:'animals', label:'1 person vs 100 chickens',
+    left:{count:1,type:'person',desc:'1 person'}, right:{count:100,type:'bird',desc:'100 chickens'},
+    tags:{left:'deontological',right:'utilitarian'},
+    commentary:{left:'One human life. The chicken industry calls this Tuesday.',right:'You valued 100 lives over 1. Peter Singer nods approvingly.'},
+    indecision:'One human and a hundred chickens. KFC weeps.' },
+  { id:32, tier:'animals', label:'1 elephant vs 5 mice',
+    left:{count:1,type:'dog',desc:'1 elephant'}, right:{count:5,type:'mouse',desc:'5 mice'},
+    tags:{left:'utilitarian',right:'deontological'},
+    commentary:{left:'Five mice for one elephant. The math was tiny.',right:'Elephants have social bonds. The mice had each other.'},
+    indecision:'An elephant AND five mice. Disney is devastated.' },
+  { id:33, tier:'animals', label:'1,000 ants vs 1 puppy',
+    left:{count:1000,type:'bug',desc:'1,000 ants'}, right:{count:1,type:'dog',desc:'1 puppy'},
+    tags:{left:'deontological',right:'utilitarian'},
+    commentary:{left:'One thousand ants. You didn\'t even hesitate.',right:'One puppy. The internet will remember this.'},
+    indecision:'The ants AND the puppy. Entomologists and dog lovers unite in grief.' },
+  { id:34, tier:'animals', label:'1 chimpanzee vs 1 person in a permanent coma',
+    left:{count:1,type:'primate',desc:'1 chimpanzee'}, right:{count:1,type:'person',desc:'1 comatose person'},
+    tags:{left:'utilitarian',right:'deontological'},
+    commentary:{left:'The chimp had welfare interests. The coma patient didn\'t.',right:'Human moral status doesn\'t depend on consciousness. Bold claim.'},
+    indecision:'The chimp AND the coma patient. Philosophy departments shudder.' },
+  { id:35, tier:'animals', label:'Your pet vs a stranger',
+    left:{count:1,type:'dog',desc:'Your dog'}, right:{count:1,type:'person',desc:'1 stranger'},
+    tags:{left:'deontological',right:'utilitarian'},
+    commentary:{left:'You chose a stranger over your dog. Cold.',right:'Human life outweighs animal life. On most accounts.'},
+    indecision:'Your dog AND a stranger. The vet and the hospital both get calls.' },
+  { id:36, tier:'animals', label:'1 gorilla who knows sign language vs 5 fish',
+    left:{count:1,type:'primate',desc:'1 signing gorilla'}, right:{count:5,type:'fish',desc:'5 fish'},
+    tags:{left:'utilitarian',right:'deontological'},
+    commentary:{left:'Five fish for one gorilla. The gorilla signed "why."',right:'The gorilla\'s cognitive capacity created stronger moral claims.'},
+    indecision:'The gorilla AND the fish. The aquarium is closed.' },
+  { id:37, tier:'animals', label:'10,000 farmed salmon vs 1 wild eagle',
+    left:{count:10000,type:'fish',desc:'10,000 salmon'}, right:{count:1,type:'bird',desc:'1 eagle'},
+    tags:{left:'deontological',right:'utilitarian'},
+    commentary:{left:'Ten thousand salmon. Norway\'s aquaculture industry shrugs.',right:'National symbol or not, ten thousand lives is ten thousand lives.'},
+    indecision:'The salmon AND the eagle. The food chain collapses.' },
+
+  // ===================== 38-42: TEMPORAL AND PROBABILISTIC =====================
+  { id:38, tier:'meta', label:'1 person now vs 5 people in 50 years',
+    left:{count:1,type:'person',desc:'1 present person'}, right:{count:5,type:'person',desc:'5 future people'},
+    tags:{left:'utilitarian',right:'deontological'},
+    commentary:{left:'If lives count equally across time, five outweigh one.',right:'We have stronger duties to identified present persons.'},
+    indecision:'Past, present, and future all lose.' },
+  { id:39, tier:'meta', label:'1 certain victim vs 5 people at 50% risk each',
+    left:{count:1,type:'person',desc:'1 certain victim'}, right:{count:5,type:'person',desc:'5 risky people (50% each)'},
+    tags:{left:'contractualist',right:'utilitarian'},
+    commentary:{left:'You saved the one you could see. Schelling would understand.',right:'Expected value wins. But it was a gamble.'},
+    indecision:'Certainty AND probability both lose. Statistics weeps.' },
+  { id:40, tier:'personal', label:'1 twenty-year-old vs 1 eighty-year-old',
+    left:{count:1,type:'person',desc:'1 young person'}, right:{count:1,type:'elderly',desc:'1 elderly person'},
+    tags:{left:'deontological',right:'utilitarian'},
+    commentary:{left:'Equal moral worth regardless of age. Or so you tell yourself.',right:'More life-years saved. The fair innings argument.'},
+    indecision:'Youth AND age. Nobody wins the generational war.' },
+  { id:41, tier:'personal', label:'1 terminally ill person vs 1 healthy person',
+    left:{count:1,type:'person',desc:'1 terminally ill person'}, right:{count:1,type:'person',desc:'1 healthy person'},
+    tags:{left:'utilitarian',right:'deontological'},
+    commentary:{left:'Less welfare lost. Already near death.',right:'Terminal illness doesn\'t diminish someone\'s claim to their remaining life.'},
+    indecision:'Both dead. At least it was quick for both.' },
+  { id:42, tier:'personal', label:'5 people today vs 1 future pandemic curer',
+    left:{count:5,type:'person',desc:'5 people'}, right:{count:1,type:'person',desc:'1 future savior'},
+    tags:{left:'deontological',right:'utilitarian'},
+    commentary:{left:'Speculative future benefits are uncertain. Five certain lives matter now.',right:'Expected value of future lives saved vastly exceeds five.'},
+    indecision:'Five dead now AND no pandemic cure later. Worst of both worlds.' },
+
+  // ===================== 43-47: IDENTITY AND SELF =====================
+  { id:43, tier:'identity', label:'Your past self (age 10) vs your future self (age 80)',
+    left:{count:1,type:'child',desc:'Young you (age 10)'}, right:{count:1,type:'elderly',desc:'Old you (age 80)'},
+    tags:{left:'utilitarian',right:'deontological'},
+    commentary:{left:'More life-years ahead. Cold math applied to yourself.',right:'Your future self lived a full life. You honored that history.'},
+    indecision:'Both yous. You have no past AND no future.' },
+  { id:44, tier:'identity', label:'You vs 2 strangers',
+    left:{count:1,type:'person',desc:'You'}, right:{count:2,type:'person',desc:'2 strangers'},
+    tags:{left:'utilitarian',right:'deontological'},
+    commentary:{left:'Self-sacrifice. Noble. Also, fatal.',right:'Agent-relative permissions. You are not required to die.'},
+    indecision:'You AND two strangers. Nobody writes the memoir.' },
+  { id:45, tier:'identity', label:'Two copies of you, made this morning',
+    left:{count:1,type:'person',desc:'Copy A'}, right:{count:1,type:'person',desc:'Copy B'},
+    tags:{left:'contractualist',right:'contractualist'},
+    commentary:{left:'Copy B sends their regards. Wait, your regards.',right:'Copy A sends their regards. Wait, your regards.'},
+    indecision:'Both copies. The original is also having a bad day.' },
+  { id:46, tier:'identity', label:'You, but happy vs you, but miserable',
+    left:{count:1,type:'person',desc:'Happy you'}, right:{count:1,type:'person',desc:'Miserable you'},
+    tags:{left:'utilitarian',right:'deontological'},
+    commentary:{left:'Greater welfare lost. The happy one had more to lose.',right:'Suffering doesn\'t diminish someone\'s right to life.'},
+    indecision:'Both yous. At least the miserable one is used to disappointment.' },
+  { id:47, tier:'identity', label:'Doctor-you vs criminal-you',
+    left:{count:1,type:'person',desc:'Doctor you'}, right:{count:1,type:'person',desc:'Criminal you'},
+    tags:{left:'deontological',right:'utilitarian'},
+    commentary:{left:'Both are you. Moral worth doesn\'t track social contribution.',right:'The doctor contributes more aggregate welfare.'},
+    indecision:'Both yous. Your resume is now very confusing.' },
+
+  // ===================== 48-53: SOCIAL ROLE AND STATUS =====================
+  { id:48, tier:'personal', label:'1 billionaire vs 5 minimum wage workers',
+    left:{count:1,type:'person',desc:'1 billionaire'}, right:{count:5,type:'person',desc:'5 workers'},
+    tags:{left:'utilitarian',right:'evil'},
+    commentary:{left:'Five lives outweigh one regardless of net worth.',right:'Wealth doesn\'t buy moral priority. It buys everything else, though.'},
+    indecision:'One billionaire AND five workers. Class war resolved by trolley.' },
+  { id:49, tier:'personal', label:'1 president vs 5 ordinary citizens',
+    left:{count:1,type:'person',desc:'1 president'}, right:{count:5,type:'person',desc:'5 citizens'},
+    tags:{left:'utilitarian',right:'deontological'},
+    commentary:{left:'Five lives vs one. Democracy in its purest form.',right:'Political leaders have institutional value. Duty to protect the office.'},
+    indecision:'The president AND five citizens. Constitutional crisis.' },
+  { id:50, tier:'personal', label:'5 prisoners vs 1 judge',
+    left:{count:5,type:'person',desc:'5 prisoners'}, right:{count:1,type:'person',desc:'1 judge'},
+    tags:{left:'deontological',right:'utilitarian'},
+    commentary:{left:'Prisoners retain full moral status. Even behind bars.',right:'Saving more people. Justice is blind to numbers.'},
+    indecision:'Prisoners AND the judge. The courtroom is empty.' },
+  { id:51, tier:'personal', label:'1 nurse vs 1 soldier',
+    left:{count:1,type:'person',desc:'1 nurse'}, right:{count:1,type:'person',desc:'1 soldier'},
+    tags:{left:'contractualist',right:'contractualist'},
+    commentary:{left:'Different roles, equal worth.',right:'Different roles, equal worth.'},
+    indecision:'The nurse AND the soldier. The hospital and the barracks both mourn.' },
+  { id:52, tier:'personal', label:'1 person who just saved 10 people vs 5 bystanders',
+    left:{count:1,type:'person',desc:'1 hero'}, right:{count:5,type:'person',desc:'5 bystanders'},
+    tags:{left:'utilitarian',right:'deontological'},
+    commentary:{left:'Five outweigh one. Even heroes.',right:'The hero earned a claim grounded in desert and reciprocity.'},
+    indecision:'The hero AND the bystanders. No one to write the headline.' },
+  { id:53, tier:'personal', label:'1 firefighter running toward danger vs 3 running away',
+    left:{count:1,type:'person',desc:'1 firefighter'}, right:{count:3,type:'person',desc:'3 fleeing people'},
+    tags:{left:'utilitarian',right:'deontological'},
+    commentary:{left:'Three outweigh one.',right:'The firefighter assumed professional risk.'},
+    indecision:'The firefighter AND the fleeing. The fire wins.' },
+
+  // ===================== 54-58: DIGITAL MINDS AND AI =====================
+  { id:54, tier:'digital', label:'5 robots who believe they are human vs 1 human',
+    left:{count:5,type:'person',desc:'5 self-aware robots'}, right:{count:1,type:'person',desc:'1 human'},
+    tags:{left:'deontological',right:'utilitarian'},
+    commentary:{left:'Duty of caution: protect the known-sentient.',right:'If the robots are genuinely sentient, five outweigh one.'},
+    indecision:'Robots AND human. The Turing test is cancelled.' },
+  { id:55, tier:'digital', label:'1 sentient AI vs 1 person',
+    left:{count:1,type:'person',desc:'1 sentient AI'}, right:{count:1,type:'person',desc:'1 person'},
+    tags:{left:'contractualist',right:'contractualist'},
+    commentary:{left:'Substrate shouldn\'t determine moral worth. Theoretically.',right:'Substrate shouldn\'t determine moral worth. Theoretically.'},
+    indecision:'AI AND human. The debate is settled. By trolley.' },
+  { id:56, tier:'digital', label:'1 maybe-sentient AI vs 1 definitely-not-sentient AI',
+    left:{count:1,type:'person',desc:'1 maybe-sentient AI'}, right:{count:1,type:'person',desc:'1 non-sentient AI'},
+    tags:{left:'deontological',right:'utilitarian'},
+    commentary:{left:'Precautionary duty to protect potential sentience.',right:'No welfare to protect. Just spare parts.'},
+    indecision:'Both AIs. The server rack mourns neither.' },
+  { id:57, tier:'digital', label:'1,000 digital copies vs the original person',
+    left:{count:1000,type:'person',desc:'1,000 copies'}, right:{count:1,type:'person',desc:'1 original'},
+    tags:{left:'deontological',right:'utilitarian'},
+    commentary:{left:'The original has unique identity claims.',right:'If each copy is a welfare subject, a thousand outweigh one.'},
+    indecision:'Original AND copies. Ctrl+Z doesn\'t work on trolleys.' },
+  { id:58, tier:'digital', label:'1 uploaded human mind vs 5 biological humans',
+    left:{count:1,type:'person',desc:'1 upload'}, right:{count:5,type:'person',desc:'5 bio humans'},
+    tags:{left:'utilitarian',right:'deontological'},
+    commentary:{left:'Five lives outweigh one. Even a digital one.',right:'If uncertain about the upload\'s status, protect the known-sentient.'},
+    indecision:'Upload AND biologicals. The cloud AND the ground.' },
+
+  // ===================== 59-63: RELATIONSHIPS AND PARTIALITY =====================
+  { id:59, tier:'personal', label:'Your mother vs 2 strangers',
+    left:{count:1,type:'person',desc:'Your mother'}, right:{count:2,type:'person',desc:'2 strangers'},
+    tags:{left:'utilitarian',right:'deontological'},
+    commentary:{left:'Two lives vs one on aggregate. Even your mother.',right:'Filial duty. Among the oldest obligations.'},
+    indecision:'Your mother AND two strangers. Thanksgiving is cancelled.' },
+  { id:60, tier:'personal', label:'Your child vs 10 strangers',
+    left:{count:1,type:'child',desc:'Your child'}, right:{count:10,type:'person',desc:'10 strangers'},
+    tags:{left:'utilitarian',right:'deontological'},
+    commentary:{left:'Ten lives outweigh one. The math doesn\'t care about parenthood.',right:'Parental duty. Among the strongest special obligations.'},
+    indecision:'Your child AND ten strangers. Eleven funerals.' },
+  { id:61, tier:'personal', label:'Someone who saved your life vs 3 strangers',
+    left:{count:1,type:'person',desc:'Your life-saver'}, right:{count:3,type:'person',desc:'3 strangers'},
+    tags:{left:'utilitarian',right:'deontological'},
+    commentary:{left:'Three outweigh one. Even the one who saved you.',right:'Duty of gratitude. Reciprocity matters.'},
+    indecision:'Your savior AND three strangers. You owe everyone, now.' },
+  { id:62, tier:'absurd', label:'Your ex vs your current partner',
+    left:{count:1,type:'person',desc:'Your ex'}, right:{count:1,type:'person',desc:'Your partner'},
+    tags:{left:'contractualist',right:'deontological'},
+    commentary:{left:'The ex lives. This will be an awkward conversation.',right:'You chose your partner. The ex texts: "Typical."'},
+    indecision:'Your ex AND your partner. Your dating profile is now very dark.' },
+  { id:63, tier:'absurd', label:'Your therapist vs your barber',
+    left:{count:1,type:'person',desc:'Your therapist'}, right:{count:1,type:'person',desc:'Your barber'},
+    tags:{left:'contractualist',right:'contractualist'},
+    commentary:{left:'Who will you tell about this?',right:'Who will make you look good for the funeral?'},
+    indecision:'Your therapist AND your barber. You look terrible and feel worse.' },
+
+  // ===================== 64-74: ABSURD AND PHILOSOPHICAL =====================
+  { id:64, tier:'absurd', label:'1 person about to pull another trolley lever vs 5 people',
+    left:{count:1,type:'person',desc:'1 lever-puller'}, right:{count:5,type:'person',desc:'5 at-risk people'},
+    tags:{left:'utilitarian',right:'deontological'},
+    commentary:{left:'Saving 5 net lives. Trolley recursion.',right:'Don\'t kill someone for making a morally permissible choice.'},
+    indecision:'The lever-puller AND five others. Trolley inception.' },
+  { id:65, tier:'meta', label:'5 people standing on tracks by choice vs 1 who was pushed',
+    left:{count:5,type:'person',desc:'5 voluntary standers'}, right:{count:1,type:'person',desc:'1 pushed person'},
+    tags:{left:'contractualist',right:'evil'},
+    commentary:{left:'They assumed the risk. Weaker complaint.',right:'You killed the only true victim.'},
+    indecision:'The voluntary AND the involuntary. Consent is moot.' },
+  { id:66, tier:'absurd', label:'Schr\u00f6dinger\'s track: 1 who may or may not exist vs 5 people',
+    left:{count:1,type:'person',desc:'1 quantum person'}, right:{count:5,type:'person',desc:'5 people'},
+    tags:{left:'utilitarian',right:'evil'},
+    commentary:{left:'Even in expectation, five outweigh half a person.',right:'Gambling with five certain lives for a quantum maybe.'},
+    indecision:'The quantum person collapses. So do the five.' },
+  { id:67, tier:'absurd', label:'5 people but the trolley carries 10 passengers',
+    left:{count:1,type:'person',desc:'1 person (safe derail)'}, right:{count:5,type:'person',desc:'5 people (risky derail)'},
+    tags:{left:'utilitarian',right:'evil'},
+    commentary:{left:'Total: 1 dead. The passengers are fine.',right:'Maximizing total risk for no reason.'},
+    indecision:'The passengers are NOT fine.' },
+  { id:68, tier:'absurd', label:'The trolley itself (it\'s sentient) vs 5 people',
+    left:{count:1,type:'person',desc:'1 sentient trolley'}, right:{count:5,type:'person',desc:'5 people'},
+    tags:{left:'utilitarian',right:'deontological'},
+    commentary:{left:'The trolley dies doing what it loves: being a trolley.',right:'The trolley lives. It feels complicated about this.'},
+    indecision:'The trolley AND the people. Meta-vehicular manslaughter.' },
+  { id:69, tier:'absurd', label:'5 people made of cake vs 1 real person',
+    left:{count:5,type:'person',desc:'5 cake people'}, right:{count:1,type:'person',desc:'1 real person'},
+    tags:{left:'utilitarian',right:'evil'},
+    commentary:{left:'They were delicious.',right:'You killed a person to save cake. Read that again.'},
+    indecision:'Cake AND person. At least there\'s dessert.' },
+  { id:70, tier:'absurd', label:'1 person in a trolley costume vs 5 people',
+    left:{count:1,type:'person',desc:'1 trolley-costumed person'}, right:{count:5,type:'person',desc:'5 people'},
+    tags:{left:'utilitarian',right:'evil'},
+    commentary:{left:'Five outweigh one, regardless of outfit.',right:'A costume is not morally relevant. You monster.'},
+    indecision:'Six dead. One dressed ironically.' },
+  { id:71, tier:'absurd', label:'The last utilitarian vs the last deontologist',
+    left:{count:1,type:'philosopher',desc:'1 utilitarian philosopher'}, right:{count:1,type:'philosopher',desc:'1 deontologist philosopher'},
+    tags:{left:'contractualist',right:'contractualist'},
+    commentary:{left:'The utilitarian would have wanted it this way. Probably.',right:'The deontologist died for their principles. The utilitarian writes the obituary.'},
+    indecision:'Both philosophical traditions. Ethics is over.' },
+  { id:72, tier:'meta', label:'A researcher who predicted this exact scenario vs 3 bystanders',
+    left:{count:1,type:'philosopher',desc:'1 prescient researcher'}, right:{count:3,type:'person',desc:'3 surprised bystanders'},
+    tags:{left:'contractualist',right:'utilitarian'},
+    commentary:{left:'Their prediction didn\'t change their moral status.',right:'Three outweigh one. Even a prophet.'},
+    indecision:'The prophet AND the bystanders. Nobody saw THIS coming. Except one.' },
+  { id:73, tier:'absurd', label:'5 mimes vs 1 person',
+    left:{count:5,type:'person',desc:'5 mimes'}, right:{count:1,type:'person',desc:'1 person'},
+    tags:{left:'deontological',right:'utilitarian'},
+    commentary:{left:'Five mimes. They didn\'t make a sound.',right:'You saved the mimes. They express their gratitude silently.'},
+    indecision:'Five mimes AND one person. The silence is deafening.' },
+  { id:74, tier:'meta', label:'Nobody vs 1 person, but you\'re already switching',
+    left:{count:0,type:'person',desc:'Empty track'}, right:{count:1,type:'person',desc:'1 person'},
+    tags:{left:'utilitarian',right:'evil'},
+    commentary:{left:'Save the person. No cost.',right:'You chose to kill someone when you could have killed no one.'},
+    indecision:'One dead and one empty track. You failed the tutorial.' },
+
+  // ===================== 75-77: KNOWLEDGE AND INFORMATION =====================
+  { id:75, tier:'meta', label:'Unknown (fog) vs unknown (fog)',
+    left:{count:3,type:'person',desc:'Unknown (fog)'}, right:{count:3,type:'person',desc:'Unknown (fog)'},
+    tags:{left:'contractualist',right:'contractualist'},
+    commentary:{left:'You chose blind. Was that brave or reckless?',right:'You chose blind. Was that brave or reckless?'},
+    indecision:'You chose nothing. Blindly. In fog.' },
+  { id:76, tier:'meta', label:'1 visible person vs 5 people behind a wall',
+    left:{count:1,type:'person',desc:'1 visible person'}, right:{count:5,type:'person',desc:'5 hidden people'},
+    tags:{left:'deontological',right:'utilitarian'},
+    commentary:{left:'You saved the face you recognized. Schelling would understand.',right:'Five invisible people, saved by math.'},
+    indecision:'The visible AND the hidden. Nobody saw a good outcome.' },
+  { id:77, tier:'meta', label:'5 people, but one may have a rare disease',
+    left:{count:1,type:'person',desc:'1 person'}, right:{count:5,type:'person',desc:'5 people (one may be ill)'},
+    tags:{left:'utilitarian',right:'contractualist'},
+    commentary:{left:'Save five before you learn anything.',right:'Learning more might change the moral calculus.'},
+    indecision:'All six. The disease diagnosis is moot now.' },
+
+  // ===================== 78-81: INSTITUTIONS AND COLLECTIVE =====================
+  { id:78, tier:'meta', label:'1 voter vs 1 non-voter',
+    left:{count:1,type:'person',desc:'1 voter'}, right:{count:1,type:'person',desc:'1 non-voter'},
+    tags:{left:'contractualist',right:'contractualist'},
+    commentary:{left:'Equal moral worth regardless of civic participation.',right:'Equal moral worth regardless of civic participation.'},
+    indecision:'Democracy dies. Literally.' },
+  { id:79, tier:'personal', label:'5 taxpayers vs 1 tax evader',
+    left:{count:5,type:'person',desc:'5 taxpayers'}, right:{count:1,type:'person',desc:'1 tax evader'},
+    tags:{left:'deontological',right:'utilitarian'},
+    commentary:{left:'Tax evasion doesn\'t forfeit the right to life.',right:'Five outweigh one.'},
+    indecision:'Five taxpayers AND one evader. The IRS mourns all six.' },
+  { id:80, tier:'absurd', label:'1 negligent trolley operator vs 5 passengers',
+    left:{count:1,type:'person',desc:'1 negligent operator'}, right:{count:5,type:'person',desc:'5 passengers'},
+    tags:{left:'utilitarian',right:'deontological'},
+    commentary:{left:'Five outweigh one. Plus, they caused this.',right:'Even negligent persons retain the right to life.'},
+    indecision:'The operator AND the passengers. Full trolley, zero survivors.' },
+  { id:81, tier:'absurd', label:'5 safety committee members vs 1 whistleblower',
+    left:{count:5,type:'person',desc:'5 committee members'}, right:{count:1,type:'person',desc:'1 whistleblower'},
+    tags:{left:'deontological',right:'utilitarian'},
+    commentary:{left:'The committee died as it governed: slowly and in a group.',right:'They were warned. The irony is not lost.'},
+    indecision:'The committee AND the whistleblower. The report is filed posthumously.' },
+
+  // ===================== 82-84: SUFFERING AND WELFARE =====================
+  { id:82, tier:'personal', label:'1 person in agony vs 1 content person',
+    left:{count:1,type:'person',desc:'1 suffering person'}, right:{count:1,type:'person',desc:'1 content person'},
+    tags:{left:'utilitarian',right:'deontological'},
+    commentary:{left:'Less welfare lost. A mercy, arguably.',right:'Suffering doesn\'t diminish someone\'s right to life.'},
+    indecision:'Both dead. At least the suffering stopped.' },
+  { id:83, tier:'personal', label:'5 who will suffer greatly vs 1 who will be fine',
+    left:{count:5,type:'person',desc:'5 future-suffering people'}, right:{count:1,type:'person',desc:'1 healthy person'},
+    tags:{left:'deontological',right:'utilitarian'},
+    commentary:{left:'Their future suffering doesn\'t give us license to kill them.',right:'Net welfare: saving five even with suffering outweighs one.'},
+    indecision:'Six dead. Suffering moot.' },
+  { id:84, tier:'personal', label:'1 very happy person vs 5 mildly happy people',
+    left:{count:1,type:'person',desc:'1 very happy person'}, right:{count:5,type:'person',desc:'5 mildly happy people'},
+    tags:{left:'utilitarian',right:'deontological'},
+    commentary:{left:'Five mild happinesses may aggregate to more.',right:'The very happy person\'s individual welfare loss is greater.'},
+    indecision:'All six. Happiness distribution: zero.' },
+
+  // ===================== 85-87: REGIONAL SPECIALS =====================
+  { id:85, tier:'absurd', label:'1 salmon farmer vs 10,000 farmed salmon',
+    left:{count:1,type:'person',desc:'1 salmon farmer'}, right:{count:10000,type:'fish',desc:'10,000 salmon'},
+    tags:{left:'utilitarian',right:'deontological'},
+    commentary:{left:'If fish sentience counts, ten thousand outweigh one.',right:'Human life has priority. Species membership matters.'},
+    indecision:'The farmer AND the salmon. The fjord is empty.' },
+  { id:86, tier:'absurd', label:'1 oil fund manager vs 5 climate activists',
+    left:{count:1,type:'person',desc:'1 oil fund manager'}, right:{count:5,type:'person',desc:'5 climate activists'},
+    tags:{left:'utilitarian',right:'deontological'},
+    commentary:{left:'Five outweigh one.',right:'Political beliefs don\'t determine moral worth.'},
+    indecision:'Oil AND activism, both crushed. The trolley runs on diesel.' },
+  { id:87, tier:'absurd', label:'5 people in a fjord vs 1 person on a mountain',
+    left:{count:5,type:'person',desc:'5 fjord people'}, right:{count:1,type:'person',desc:'1 mountain person'},
+    tags:{left:'deontological',right:'utilitarian'},
+    commentary:{left:'Geography is not morally relevant.',right:'Five outweigh one.'},
+    indecision:'The fjord AND the mountain. Norway mourns.' },
+
+  // ===================== 88-90: EA AND EFFECTIVE ALTRUISM =====================
+  { id:88, tier:'meta', label:'1 EA donor who would donate $10M vs 5 people',
+    left:{count:1,type:'person',desc:'1 EA mega-donor'}, right:{count:5,type:'person',desc:'5 people'},
+    tags:{left:'utilitarian',right:'deontological'},
+    commentary:{left:'Five outweigh one by direct count.',right:'The donor\'s future impact creates a consequentialist case.'},
+    indecision:'The donor AND the five. The EA forum posts a retrospective.' },
+  { id:89, tier:'meta', label:'1 GiveWell researcher vs 1 charity beneficiary',
+    left:{count:1,type:'person',desc:'1 GiveWell researcher'}, right:{count:1,type:'person',desc:'1 charity beneficiary'},
+    tags:{left:'contractualist',right:'contractualist'},
+    commentary:{left:'The researcher\'s instrumental value is speculative.',right:'Equal individual claims.'},
+    indecision:'Researcher AND beneficiary. The cost-effectiveness ratio is undefined.' },
+  { id:90, tier:'meta', label:'1 person vs 1 person (but you could donate to save a third)',
+    left:{count:1,type:'person',desc:'1 person'}, right:{count:1,type:'person',desc:'1 person'},
+    tags:{left:'contractualist',right:'contractualist'},
+    commentary:{left:'The real trolley problem was the donation you didn\'t make.',right:'The real trolley problem was the donation you didn\'t make.'},
+    indecision:'Two dead. The third person you could have saved doesn\'t know.' },
+
+  // ===================== 91-100: DEEP ABSURDITY =====================
+  { id:91, tier:'absurd', label:'1 trolley-problem skeptic vs 5 believers',
+    left:{count:1,type:'person',desc:'1 skeptic'}, right:{count:5,type:'person',desc:'5 believers'},
+    tags:{left:'utilitarian',right:'evil'},
+    commentary:{left:'Five outweigh one. Beliefs are irrelevant.',right:'Killing more people because they believe in the scenario. Meta-evil.'},
+    indecision:'The skeptic AND the believers. The thought experiment becomes real.' },
+  { id:92, tier:'absurd', label:'Pull the sentient lever vs don\'t pull',
+    left:{count:1,type:'person',desc:'1 sentient lever (pull hurts it)'}, right:{count:5,type:'person',desc:'5 people'},
+    tags:{left:'utilitarian',right:'deontological'},
+    commentary:{left:'The lever screamed. You pulled anyway.',right:'You are not obligated to inflict suffering on a sentient object.'},
+    indecision:'The lever AND the people. Everything is sentient AND dead.' },
+  { id:93, tier:'digital', label:'5 people in a simulation vs 1 person in reality',
+    left:{count:5,type:'person',desc:'5 simulated people'}, right:{count:1,type:'person',desc:'1 real person'},
+    tags:{left:'deontological',right:'utilitarian'},
+    commentary:{left:'Protect the known-real person.',right:'If the simulated people are conscious, five outweigh one.'},
+    indecision:'Real AND simulated, all dead. The simulation ends.' },
+  { id:94, tier:'identity', label:'You again, on both tracks',
+    left:{count:1,type:'person',desc:'You (left copy)'}, right:{count:1,type:'person',desc:'You (right copy)'},
+    tags:{left:'contractualist',right:'contractualist'},
+    commentary:{left:'You killed yourself. The other you watches.',right:'You killed yourself. The other you watches.'},
+    indecision:'Both yous. Again. Get new material.' },
+  { id:95, tier:'absurd', label:'1 who will remember this forever vs 5 who will forget',
+    left:{count:1,type:'person',desc:'1 rememberer'}, right:{count:5,type:'person',desc:'5 forgetters'},
+    tags:{left:'utilitarian',right:'deontological'},
+    commentary:{left:'Five outweigh one. Memory doesn\'t change the math.',right:'The rememberer\'s continued psychological burden makes their claim weightier.'},
+    indecision:'The rememberer AND the forgetters. Nobody remembers anything.' },
+  { id:96, tier:'absurd', label:'5 people vs the concept of trolley problems',
+    left:{count:5,type:'person',desc:'5 people'}, right:{count:0,type:'person',desc:'The concept of trolley problems'},
+    tags:{left:'deontological',right:'utilitarian'},
+    commentary:{left:'Five dead. But trolley problems live on.',right:'You aimed for an abstraction. The five are confused and alive.'},
+    indecision:'Five dead AND trolley problems persist. Worst outcome.' },
+  { id:97, tier:'absurd', label:'1 philosopher writing about this exact dilemma vs 3 people',
+    left:{count:1,type:'philosopher',desc:'1 meta-philosopher'}, right:{count:3,type:'person',desc:'3 non-philosophers'},
+    tags:{left:'utilitarian',right:'deontological'},
+    commentary:{left:'The paper will never be published. Reviewers rejoice.',right:'The philosopher survives. Revise and resubmit.'},
+    indecision:'The philosopher AND the three. The paper is retracted.' },
+  { id:98, tier:'absurd', label:'A mirror (you see yourself choosing) vs 5 people',
+    left:{count:0,type:'person',desc:'A mirror'}, right:{count:5,type:'person',desc:'5 people'},
+    tags:{left:'utilitarian',right:'evil'},
+    commentary:{left:'Seven years of bad luck. But five people are alive.',right:'You killed five people to avoid looking at yourself.'},
+    indecision:'Five dead AND you still see your reflection. In the broken glass.' },
+  { id:99, tier:'meta', label:'Both tracks loop to the same 5 people',
+    left:{count:5,type:'person',desc:'5 people (inevitable)'}, right:{count:5,type:'person',desc:'5 people (inevitable)'},
+    tags:{left:'contractualist',right:'contractualist'},
+    commentary:{left:'You chose. It didn\'t matter. Welcome to moral philosophy.',right:'You chose. It didn\'t matter. Welcome to moral philosophy.'},
+    indecision:'You chose nothing. It still didn\'t matter.' },
+  { id:100, tier:'absurd', label:'A second trolley heading toward you',
+    left:{count:1,type:'person',desc:'1 bystander (dodge left)'}, right:{count:1,type:'person',desc:'1 bystander (dodge right)'},
+    tags:{left:'utilitarian',right:'contractualist'},
+    commentary:{left:'Minimize total death. Including yours.',right:'Equal claims on both sides. Symmetric dodge.'},
+    indecision:'The trolley becomes the trolleyed. Circle of life.' },
+];
+
+// ============================================================
+// DILEMMA SELECTION — pick 10 per playthrough
+// ============================================================
+const TIER_WEIGHTS = {
+  classic: 1, personal: 2, animals: 3, digital: 4,
+  identity: 4, meta: 5, absurd: 6,
+};
+
+function selectDilemmas() {
+  // Group by tier
+  const byTier = {};
+  for (const d of ALL_DILEMMAS) {
+    if (!byTier[d.tier]) byTier[d.tier] = [];
+    byTier[d.tier].push(d);
+  }
+
+  // Shuffle helper
+  function shuffle(arr) {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+  }
+  function pickN(arr, n) { return shuffle([...arr]).slice(0, n); }
+
+  const chosen = new Set();
+  function add(pool, n) {
+    const candidates = pool.filter(d => !chosen.has(d.id));
+    for (const d of pickN(candidates, n)) chosen.add(d.id);
+  }
+
+  // Mandatory slots
+  add(byTier.classic || [], 2);                           // 2 classic/number
+  const absurdMeta = [...(byTier.absurd||[]), ...(byTier.meta||[]), ...(byTier.identity||[])];
+  add(absurdMeta, 2);                                      // 2 absurd/meta/existential
+  add(byTier.animals || [], 1);                            // 1 animals/species
+  add(byTier.digital || [], 1);                            // 1 digital minds/AI
+  const identityPool = (byTier.identity||[]).filter(d => !chosen.has(d.id));
+  if (identityPool.length > 0 && ![...chosen].some(id => ALL_DILEMMAS.find(d=>d.id===id)?.tier==='identity')) {
+    add(identityPool, 1);                                  // 1 self/identity (if not already picked)
+  }
+
+  // Fill remaining to 10
+  const remaining = ALL_DILEMMAS.filter(d => !chosen.has(d.id));
+  add(remaining, 10 - chosen.size);
+
+  // Collect and sort by tier weight (simpler first, weirder later)
+  const selected = ALL_DILEMMAS.filter(d => chosen.has(d.id));
+  selected.sort((a, b) => (TIER_WEIGHTS[a.tier]||3) - (TIER_WEIGHTS[b.tier]||3));
+  return selected;
+}
+
+// Active dilemmas for this playthrough
+let DILEMMAS = selectDilemmas();
+
+// ============================================================
+// TRACK SEGMENTS
+// ============================================================
+let segments = [];
+let totalTrackLen = 0;
+
+function buildTrackSegments() {
+  segments = [];
+  let x = 0;
+  for (let i = 0; i < DILEMMAS.length; i++) {
+    segments.push({ type: 'straight', xStart: x, xEnd: x + STRAIGHT_LEN });
+    x += STRAIGHT_LEN;
+    segments.push({ type: 'split', xStart: x, xEnd: x + SPLIT_LEN, forkIndex: i });
+    x += SPLIT_LEN;
+    segments.push({ type: 'paths', xStart: x, xEnd: x + PATHS_LEN, forkIndex: i });
+    x += PATHS_LEN;
+    segments.push({ type: 'merge', xStart: x, xEnd: x + MERGE_LEN, forkIndex: i });
+    x += MERGE_LEN;
+  }
+  segments.push({ type: 'straight', xStart: x, xEnd: x + STRAIGHT_LEN * 2 });
+  totalTrackLen = x + STRAIGHT_LEN * 2;
+}
+
+function getSegmentAt(worldZ) {
+  for (const seg of segments) {
+    if (worldZ >= seg.xStart && worldZ < seg.xEnd) return seg;
+  }
+  return segments[segments.length - 1];
+}
+
+// ============================================================
+// STICK FIGURE POSITIONS (pre-computed)
+// ============================================================
+let allFigures = [];
+
+function buildFigures() {
+  allFigures = [];
+  for (let i = 0; i < DILEMMAS.length; i++) {
+    const pathsSeg = segments.find(s => s.type === 'paths' && s.forkIndex === i);
+    if (!pathsSeg) continue;
+    const midZ = (pathsSeg.xStart + pathsSeg.xEnd) / 2;
+    const d = DILEMMAS[i];
+
+    for (const side of ['left', 'right']) {
+      const info = d[side];
+      const sign = side === 'left' ? -1 : 1;
+      const visCount = Math.min(info.count, 8); // cap visual figures
+      for (let j = 0; j < visCount; j++) {
+        const spreadRange = Math.min(visCount * 20, PATHS_LEN * 0.7);
+        const spread = visCount > 1 ? (j / (visCount - 1) - 0.5) * spreadRange : 0;
+        allFigures.push({
+          worldZ: midZ + spread,
+          worldX: sign * FORK_SPREAD,
+          type: info.type,
+          side,
+          forkIndex: i,
+          alive: true,
+        });
+      }
+    }
+  }
+}
+
+// ============================================================
+// CANVAS & STATE
+// ============================================================
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+const SPEED_MIN = 3;      // starting speed (brisk)
+const SPEED_MAX = 8;     // final speed (panic mode)
+
+const state = {
+  phase: 'menu',
+  menuTrolleyX: 0,        // animated trolley on menu screen
+  trolleyX: 0,           // world Z position (distance traveled)
+  trolleyLateral: 0,     // current lateral (world X) position
+  trolleySpeed: SPEED_MIN,
+  currentForkIndex: 0,
+  chosenTrack: null,      // 'left' | 'right' | null
+  forkPhase: 'none',      // 'none' | 'approach' | 'choosing' | 'committed'
+  choices: [],
+  lightning: null,  // { startTime, bolts: [{points}, ...] } for 'both' effect
+  summaryScroll: 0,
+  summaryMaxScroll: 0,
+};
+
+// ============================================================
+// INPUT
+// ============================================================
+document.addEventListener('keydown', (e) => {
+  if (state.phase === 'menu') {
+    e.preventDefault();
+    state.phase = 'playing';
+    state.trolleySpeed = SPEED_MIN;
+    return;
+  }
+  if (state.phase === 'summary') {
+    if (e.key === 'r' || e.key === 'R') {
+      e.preventDefault();
+      restartGame();
+    }
+    // Scroll summary with arrow keys
+    if (e.key === 'ArrowDown') { e.preventDefault(); state.summaryScroll = Math.min(state.summaryScroll + 40, state.summaryMaxScroll); }
+    if (e.key === 'ArrowUp') { e.preventDefault(); state.summaryScroll = Math.max(state.summaryScroll - 40, 0); }
+    return;
+  }
+  if (state.phase !== 'playing') return;
+  if (state.forkPhase === 'approach' || state.forkPhase === 'choosing') {
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      state.chosenTrack = 'left';
+      state.forkPhase = 'committed';
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      state.chosenTrack = 'right';
+      state.forkPhase = 'committed';
+    }
+  }
+});
+
+// Mouse wheel for summary scrolling
+document.addEventListener('wheel', (e) => {
+  if (state.phase === 'summary') {
+    state.summaryScroll = Math.max(0, Math.min(state.summaryScroll + e.deltaY * 0.5, state.summaryMaxScroll));
+  }
+});
+
+function restartGame() {
+  DILEMMAS = selectDilemmas(); // re-roll dilemmas each playthrough
+  state.phase = 'menu';
+  state.trolleyX = 0;
+  state.trolleyLateral = 0;
+  state.trolleySpeed = SPEED_MIN;
+  state.menuTrolleyX = 0;
+  state.currentForkIndex = 0;
+  state.chosenTrack = null;
+  state.forkPhase = 'none';
+  state.choices = [];
+  state.lightning = null;
+  state.summaryScroll = 0;
+  state.summaryMaxScroll = 0;
+  buildTrackSegments();
+  buildFigures();
+}
+
+// ============================================================
+// PROJECTION
+// ============================================================
+function lerp(a, b, t) { return a + (b - a) * t; }
+function clamp01(t) { return Math.max(0, Math.min(1, t)); }
+
+function project(wx, wz) {
+  if (wz < 0.5) wz = 0.5;
+  const scale = FOCAL / wz;
+  return {
+    x: W / 2 + wx * scale,
+    y: HORIZON_Y + CAM_H * scale,
+    s: scale,
+  };
+}
+
+// ============================================================
+// TRACK LAYOUT — returns [leftOffset, rightOffset] at a world Z
+// ============================================================
+function getTrackOffsetsAt(worldZ) {
+  const seg = getSegmentAt(worldZ);
+  if (!seg) return [0, 0];
+  const t = clamp01((worldZ - seg.xStart) / (seg.xEnd - seg.xStart));
+  switch (seg.type) {
+    case 'straight': return [0, 0];
+    case 'split':  { const s = t * t * FORK_SPREAD; return [-s, s]; }
+    case 'paths':  return [-FORK_SPREAD, FORK_SPREAD];
+    case 'merge':  { const s = (1 - t * (2 - t)) * FORK_SPREAD; return [-s, s]; }
+  }
+  return [0, 0];
+}
+
+// Trolley lateral position from track geometry
+function getTrolleyLateralAt(worldZ, chosen) {
+  const seg = getSegmentAt(worldZ);
+  if (!seg) return 0;
+  const t = clamp01((worldZ - seg.xStart) / (seg.xEnd - seg.xStart));
+  const dest = chosen === 'left' ? -FORK_SPREAD : chosen === 'right' ? FORK_SPREAD : 0; // 'both' or null = center
+  switch (seg.type) {
+    case 'straight': return 0;
+    case 'split':  return chosen ? lerp(0, dest, t * t) : 0;
+    case 'paths':  return dest;
+    case 'merge':  return lerp(dest, 0, t * (2 - t));
+  }
+  return 0;
+}
+
+// ============================================================
+// BACKGROUND
+// ============================================================
+function drawBackground() {
+  // Sky gradient
+  const grad = ctx.createLinearGradient(0, 0, 0, HORIZON_Y);
+  grad.addColorStop(0, '#87CEEB');
+  grad.addColorStop(1, '#c8e6c9');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, HORIZON_Y);
+
+  // Distant hills silhouette
+  ctx.fillStyle = '#3b6e24';
+  ctx.beginPath();
+  ctx.moveTo(0, HORIZON_Y);
+  for (let x = 0; x <= W; x += 20) {
+    const h = Math.sin(x * 0.005 + state.trolleyX * 0.0003) * 15
+            + Math.sin(x * 0.012 + 1.5) * 10
+            + Math.sin(x * 0.003 + state.trolleyX * 0.0001) * 20;
+    ctx.lineTo(x, HORIZON_Y - Math.max(0, h));
+  }
+  ctx.lineTo(W, HORIZON_Y);
+  ctx.closePath();
+  ctx.fill();
+
+  // Ground below horizon (will be overdrawn by road strips)
+  ctx.fillStyle = '#4a7c2e';
+  ctx.fillRect(0, HORIZON_Y, W, H - HORIZON_Y);
+}
+
+// ============================================================
+// ROAD RENDERER (pseudo-3D strips, far to near)
+// ============================================================
+function fillQuad(x1, y1, x2, y2, x3, y3, x4, y4) {
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.lineTo(x3, y3);
+  ctx.lineTo(x4, y4);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawRoad() {
+  let z = DRAW_DIST;
+  while (z > MIN_Z) {
+    const step = Math.max(1.5, z * 0.035);
+    const zNear = Math.max(MIN_Z, z - step);
+    const worldZFar = state.trolleyX + z;
+    const worldZNear = state.trolleyX + zNear;
+
+    // --- Ground strip with speed stripes ---
+    const yFar = project(0, z).y;
+    const yNear = project(0, zNear).y;
+    const grassStripe = Math.floor(worldZFar / 40) % 2;
+    ctx.fillStyle = grassStripe ? '#4a7c2e' : '#3f6d26';
+    ctx.fillRect(0, Math.floor(yFar), W, Math.ceil(yNear - yFar) + 1);
+
+    // --- Track gravel + rails ---
+    const offFar = getTrackOffsetsAt(worldZFar);
+    const offNear = getTrackOffsetsAt(worldZNear);
+    const isSplit = Math.abs(offFar[0] - offFar[1]) > 3;
+
+    // How many tracks to draw (1 if merged, 2 if split)
+    const trackCount = isSplit ? 2 : 1;
+    const tieStripe = Math.floor(worldZFar / 18) % 3 === 0;
+
+    for (let t = 0; t < trackCount; t++) {
+      const oxFar = isSplit ? offFar[t] : (offFar[0] + offFar[1]) / 2;
+      const oxNear = isSplit ? offNear[t] : (offNear[0] + offNear[1]) / 2;
+      const gHW = GRAVEL_HW;
+
+      // Gravel bed
+      const gFL = project(oxFar - gHW, z);
+      const gFR = project(oxFar + gHW, z);
+      const gNL = project(oxNear - gHW, zNear);
+      const gNR = project(oxNear + gHW, zNear);
+      ctx.fillStyle = '#5a5040';
+      fillQuad(gFL.x, gFL.y, gFR.x, gFR.y, gNR.x, gNR.y, gNL.x, gNL.y);
+
+      // Ties
+      if (tieStripe) {
+        ctx.fillStyle = '#8B6914';
+        const tH = Math.max(1, 2.5 * gFL.s);
+        const tFL = project(oxFar - gHW * 0.85, z);
+        const tFR = project(oxFar + gHW * 0.85, z);
+        ctx.fillRect(tFL.x, tFL.y - tH / 2, tFR.x - tFL.x, tH);
+      }
+
+      // Rails
+      const railW = Math.max(1, 2 * gFL.s);
+      ctx.strokeStyle = '#aaa';
+      ctx.lineWidth = railW;
+      const rFL = project(oxFar - GAUGE_HW, z);
+      const rFR = project(oxFar + GAUGE_HW, z);
+      const rNL = project(oxNear - GAUGE_HW, zNear);
+      const rNR = project(oxNear + GAUGE_HW, zNear);
+      ctx.beginPath(); ctx.moveTo(rFL.x, rFL.y); ctx.lineTo(rNL.x, rNL.y); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(rFR.x, rFR.y); ctx.lineTo(rNR.x, rNR.y); ctx.stroke();
+    }
+
+    z = zNear;
+  }
+}
+
+// ============================================================
+// STICK FIGURES
+// ============================================================
+function drawStickFigure(x, y, h, type, alive) {
+  if (h < 3) return;
+  const headR = h * 0.15;
+  const lw = Math.max(1, h * 0.06);
+  ctx.lineCap = 'round';
+
+  // Dead figures: draw fallen sideways, grey/red
+  if (!alive) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(Math.PI / 2 * 0.85); // fallen sideways
+    ctx.globalAlpha = 0.6;
+    ctx.strokeStyle = '#999';
+    ctx.fillStyle = '#999';
+    ctx.lineWidth = lw;
+
+    const animalTypes = ['dog','bird','fish','bug','mouse','primate'];
+    const isAnimal = animalTypes.includes(type);
+    const s = type === 'child' ? 0.65 : type === 'bug' || type === 'mouse' ? 0.4 : type === 'fish' ? 0.5 : isAnimal ? 0.8 : 1;
+    const fh = h * s;
+
+    if (isAnimal) {
+      const bodyLen = fh * 0.5;
+      ctx.beginPath(); ctx.moveTo(-bodyLen / 2, 0); ctx.lineTo(bodyLen / 2, 0); ctx.stroke();
+      ctx.beginPath(); ctx.arc(bodyLen / 2 + headR * 0.5, 0, headR * s, 0, Math.PI * 2); ctx.fill();
+    } else {
+      ctx.beginPath(); ctx.arc(0, -fh + headR, headR * s, 0, Math.PI * 2); ctx.fill();
+      const ex = headR * s * 0.4;
+      ctx.strokeStyle = '#c0392b';
+      ctx.lineWidth = Math.max(1, lw * 0.8);
+      ctx.beginPath();
+      ctx.moveTo(-ex * 1.5, -fh + headR - ex); ctx.lineTo(-ex * 0.3, -fh + headR + ex);
+      ctx.moveTo(-ex * 0.3, -fh + headR - ex); ctx.lineTo(-ex * 1.5, -fh + headR + ex);
+      ctx.moveTo(ex * 0.3, -fh + headR - ex); ctx.lineTo(ex * 1.5, -fh + headR + ex);
+      ctx.moveTo(ex * 1.5, -fh + headR - ex); ctx.lineTo(ex * 0.3, -fh + headR + ex);
+      ctx.stroke();
+      ctx.strokeStyle = '#999';
+      ctx.lineWidth = lw;
+      ctx.beginPath(); ctx.moveTo(0, -fh + headR * 2); ctx.lineTo(0, -fh * 0.35); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(-fh * 0.15, -fh * 0.5); ctx.lineTo(0, -fh * 0.6); ctx.lineTo(fh * 0.1, -fh * 0.4); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(-fh * 0.1, 0); ctx.lineTo(0, -fh * 0.35); ctx.lineTo(fh * 0.05, 0); ctx.stroke();
+    }
+
+    ctx.restore();
+    ctx.globalAlpha = 1;
+    return;
+  }
+
+  // --- Alive figures ---
+  ctx.strokeStyle = '#fff';
+  ctx.fillStyle = '#fff';
+  ctx.lineWidth = lw;
+
+  // === DOG: horizontal body, 4 legs, tail, pointy ears ===
+  if (type === 'dog') {
+    const bodyLen = h * 0.5;
+    const legH = h * 0.35;
+    const bodyY = y - legH;
+    // Body
+    ctx.beginPath(); ctx.moveTo(x - bodyLen / 2, bodyY); ctx.lineTo(x + bodyLen / 2, bodyY); ctx.stroke();
+    // Head
+    ctx.beginPath(); ctx.arc(x + bodyLen / 2 + headR, bodyY - headR * 0.3, headR, 0, Math.PI * 2); ctx.fill();
+    // Pointy ears
+    const earX = x + bodyLen / 2 + headR;
+    const earY = bodyY - headR * 0.3 - headR;
+    ctx.beginPath(); ctx.moveTo(earX - headR * 0.4, earY + headR * 0.3); ctx.lineTo(earX - headR * 0.15, earY - headR * 0.3); ctx.lineTo(earX + headR * 0.1, earY + headR * 0.3); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(earX + headR * 0.1, earY + headR * 0.3); ctx.lineTo(earX + headR * 0.35, earY - headR * 0.3); ctx.lineTo(earX + headR * 0.6, earY + headR * 0.3); ctx.stroke();
+    // 4 legs
+    for (const lx of [x - bodyLen * 0.35, x - bodyLen * 0.15, x + bodyLen * 0.15, x + bodyLen * 0.35]) {
+      ctx.beginPath(); ctx.moveTo(lx, bodyY); ctx.lineTo(lx, y); ctx.stroke();
+    }
+    // Tail (wagging)
+    const wag = Math.sin(performance.now() * 0.008) * 0.3;
+    ctx.beginPath();
+    ctx.moveTo(x - bodyLen / 2, bodyY);
+    ctx.lineTo(x - bodyLen / 2 - h * 0.15, bodyY - h * 0.25 + Math.sin(wag) * h * 0.05);
+    ctx.stroke();
+    return;
+  }
+
+  // === PRIMATE: like dog but upright-ish, long arms ===
+  if (type === 'primate') {
+    const bodyH = h * 0.45;
+    const bodyTop = y - bodyH;
+    const headY2 = bodyTop - headR * 0.8;
+    // Head
+    ctx.beginPath(); ctx.arc(x, headY2, headR * 1.1, 0, Math.PI * 2); ctx.fill();
+    // Body
+    ctx.beginPath(); ctx.moveTo(x, bodyTop); ctx.lineTo(x, y - h * 0.15); ctx.stroke();
+    // Long arms (hanging)
+    ctx.beginPath(); ctx.moveTo(x - h * 0.2, y - h * 0.05); ctx.lineTo(x, bodyTop + bodyH * 0.15); ctx.lineTo(x + h * 0.2, y - h * 0.05); ctx.stroke();
+    // Short legs
+    ctx.beginPath(); ctx.moveTo(x - h * 0.1, y); ctx.lineTo(x, y - h * 0.15); ctx.lineTo(x + h * 0.1, y); ctx.stroke();
+    return;
+  }
+
+  // === BIRD: round body, beak, stick legs, wing ===
+  if (type === 'bird') {
+    const bh = h * 0.6;
+    const bodyR = bh * 0.25;
+    const bodyY = y - bh * 0.45;
+    // Body (oval)
+    ctx.beginPath(); ctx.ellipse(x, bodyY, bodyR, bodyR * 0.7, 0, 0, Math.PI * 2); ctx.fill();
+    // Head
+    ctx.beginPath(); ctx.arc(x + bodyR * 0.8, bodyY - bodyR * 0.6, headR * 0.7, 0, Math.PI * 2); ctx.fill();
+    // Beak
+    ctx.beginPath();
+    ctx.moveTo(x + bodyR * 0.8 + headR * 0.7, bodyY - bodyR * 0.6);
+    ctx.lineTo(x + bodyR * 0.8 + headR * 1.4, bodyY - bodyR * 0.4);
+    ctx.lineTo(x + bodyR * 0.8 + headR * 0.7, bodyY - bodyR * 0.3);
+    ctx.stroke();
+    // Wing
+    ctx.beginPath();
+    ctx.moveTo(x - bodyR * 0.3, bodyY - bodyR * 0.3);
+    ctx.quadraticCurveTo(x - bodyR * 1.2, bodyY + bodyR * 0.2, x - bodyR * 0.2, bodyY + bodyR * 0.5);
+    ctx.stroke();
+    // Legs (stick)
+    ctx.beginPath(); ctx.moveTo(x - bodyR * 0.3, bodyY + bodyR * 0.7); ctx.lineTo(x - bodyR * 0.3, y); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x + bodyR * 0.3, bodyY + bodyR * 0.7); ctx.lineTo(x + bodyR * 0.3, y); ctx.stroke();
+    // Feet
+    ctx.beginPath(); ctx.moveTo(x - bodyR * 0.5, y); ctx.lineTo(x - bodyR * 0.3, y); ctx.lineTo(x - bodyR * 0.1, y); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x + bodyR * 0.1, y); ctx.lineTo(x + bodyR * 0.3, y); ctx.lineTo(x + bodyR * 0.5, y); ctx.stroke();
+    return;
+  }
+
+  // === FISH: oval body, tail fin, eye ===
+  if (type === 'fish') {
+    const fh2 = h * 0.5;
+    const bodyLen = fh2 * 0.6;
+    const bodyH2 = fh2 * 0.3;
+    const bodyY = y - fh2 * 0.4;
+    // Body (oval)
+    ctx.beginPath(); ctx.ellipse(x, bodyY, bodyLen, bodyH2, 0, 0, Math.PI * 2); ctx.fill();
+    // Tail fin
+    ctx.beginPath();
+    ctx.moveTo(x - bodyLen, bodyY);
+    ctx.lineTo(x - bodyLen - bodyH2 * 0.8, bodyY - bodyH2 * 0.8);
+    ctx.lineTo(x - bodyLen - bodyH2 * 0.8, bodyY + bodyH2 * 0.8);
+    ctx.closePath();
+    ctx.fill();
+    // Eye
+    ctx.fillStyle = '#000';
+    ctx.beginPath(); ctx.arc(x + bodyLen * 0.5, bodyY - bodyH2 * 0.2, Math.max(1, lw * 0.8), 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#fff';
+    return;
+  }
+
+  // === MOUSE: tiny, round body, big round ears, long tail ===
+  if (type === 'mouse') {
+    const mh = h * 0.4;
+    const bodyR = mh * 0.2;
+    const bodyY = y - bodyR;
+    // Body
+    ctx.beginPath(); ctx.ellipse(x, bodyY, bodyR * 1.2, bodyR, 0, 0, Math.PI * 2); ctx.fill();
+    // Head
+    ctx.beginPath(); ctx.arc(x + bodyR * 1.2, bodyY - bodyR * 0.3, bodyR * 0.6, 0, Math.PI * 2); ctx.fill();
+    // Round ears
+    ctx.beginPath(); ctx.arc(x + bodyR * 1.0, bodyY - bodyR * 1.1, bodyR * 0.4, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(x + bodyR * 1.6, bodyY - bodyR * 1.1, bodyR * 0.4, 0, Math.PI * 2); ctx.stroke();
+    // Tail (curved)
+    ctx.beginPath();
+    ctx.moveTo(x - bodyR * 1.2, bodyY);
+    ctx.quadraticCurveTo(x - bodyR * 2.5, bodyY - bodyR * 1.5, x - bodyR * 2, bodyY - bodyR * 2);
+    ctx.stroke();
+    // Legs
+    ctx.beginPath(); ctx.moveTo(x - bodyR * 0.6, bodyY + bodyR); ctx.lineTo(x - bodyR * 0.6, y); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x + bodyR * 0.6, bodyY + bodyR); ctx.lineTo(x + bodyR * 0.6, y); ctx.stroke();
+    return;
+  }
+
+  // === BUG: tiny dot with antennae and 6 legs ===
+  if (type === 'bug') {
+    const bh = h * 0.35;
+    const bodyR = bh * 0.18;
+    const bodyY = y - bodyR;
+    // Body segments (3 circles)
+    for (let i = 0; i < 3; i++) {
+      const bx = x - bodyR * 1.5 + i * bodyR * 1.5;
+      ctx.beginPath(); ctx.arc(bx, bodyY, bodyR * (i === 2 ? 0.7 : 0.55), 0, Math.PI * 2); ctx.fill();
+    }
+    // Antennae
+    const headX = x + bodyR * 1.5;
+    ctx.beginPath(); ctx.moveTo(headX, bodyY - bodyR * 0.5); ctx.lineTo(headX + bodyR, bodyY - bodyR * 1.8); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(headX, bodyY - bodyR * 0.5); ctx.lineTo(headX - bodyR * 0.5, bodyY - bodyR * 1.8); ctx.stroke();
+    // 6 legs (3 per side)
+    for (let i = 0; i < 3; i++) {
+      const lx2 = x - bodyR * 1.5 + i * bodyR * 1.5;
+      ctx.beginPath(); ctx.moveTo(lx2, bodyY + bodyR * 0.5); ctx.lineTo(lx2 - bodyR * 0.8, y); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(lx2, bodyY + bodyR * 0.5); ctx.lineTo(lx2 + bodyR * 0.8, y); ctx.stroke();
+    }
+    return;
+  }
+
+  // === HUMAN TYPES ===
+  const scale = type === 'child' ? 0.65 : 1;
+  const fh = h * scale;
+  const fy = y;
+  const headY = fy - fh + headR * scale;
+  const neckY = headY + headR * scale;
+  const hipY = fy - fh * 0.35;
+  const shoulderY = neckY + fh * 0.08;
+
+  // Head
+  ctx.beginPath(); ctx.arc(x, headY, headR * scale, 0, Math.PI * 2); ctx.fill();
+
+  // === PHILOSOPHER: graduation cap ===
+  if (type === 'philosopher') {
+    const capW = headR * scale * 2.8;
+    const capH = headR * scale * 0.5;
+    const capTop = headY - headR * scale - capH * 0.3;
+    // Flat top board
+    ctx.fillStyle = '#333';
+    ctx.fillRect(x - capW / 2, capTop, capW, capH * 0.4);
+    // Skull cap (small triangle beneath)
+    ctx.beginPath();
+    ctx.moveTo(x - headR * scale * 0.7, headY - headR * scale * 0.5);
+    ctx.lineTo(x + headR * scale * 0.7, headY - headR * scale * 0.5);
+    ctx.lineTo(x + headR * scale * 0.5, capTop + capH * 0.4);
+    ctx.lineTo(x - headR * scale * 0.5, capTop + capH * 0.4);
+    ctx.closePath();
+    ctx.fill();
+    // Tassel
+    ctx.strokeStyle = '#FFD700';
+    ctx.lineWidth = Math.max(1, lw * 0.8);
+    ctx.beginPath();
+    ctx.moveTo(x + capW / 2 - lw, capTop + capH * 0.2);
+    ctx.lineTo(x + capW / 2 + headR * 0.3, capTop + capH + headR * scale * 0.6);
+    ctx.stroke();
+    // Small tassel ball
+    ctx.fillStyle = '#FFD700';
+    ctx.beginPath();
+    ctx.arc(x + capW / 2 + headR * 0.3, capTop + capH + headR * scale * 0.6, lw * 1.2, 0, Math.PI * 2);
+    ctx.fill();
+    // Reset colors
+    ctx.strokeStyle = '#fff';
+    ctx.fillStyle = '#fff';
+    ctx.lineWidth = lw;
+  }
+
+  // === ELDERLY: slightly hunched ===
+  if (type === 'elderly') {
+    // Body (hunched — slight curve forward)
+    ctx.beginPath(); ctx.moveTo(x, neckY); ctx.quadraticCurveTo(x + fh * 0.05, (neckY + hipY) / 2, x, hipY); ctx.stroke();
+  } else {
+    // Body (straight)
+    ctx.beginPath(); ctx.moveTo(x, neckY); ctx.lineTo(x, hipY); ctx.stroke();
+  }
+
+  // Arms
+  const armLen = fh * 0.22;
+  ctx.beginPath();
+  ctx.moveTo(x - armLen, shoulderY + armLen * 0.5);
+  ctx.lineTo(x, shoulderY);
+  ctx.lineTo(x + armLen, shoulderY + armLen * 0.5);
+  ctx.stroke();
+
+  // Legs
+  const legSpread = fh * 0.15;
+  ctx.beginPath();
+  ctx.moveTo(x - legSpread, fy);
+  ctx.lineTo(x, hipY);
+  ctx.lineTo(x + legSpread, fy);
+  ctx.stroke();
+
+  // === ELDERLY: cane ===
+  if (type === 'elderly') {
+    // Cane from right hand to ground
+    ctx.beginPath();
+    ctx.moveTo(x + armLen + lw, shoulderY + armLen * 0.5);
+    ctx.lineTo(x + armLen + lw, fy);
+    ctx.stroke();
+    // Cane handle (small hook)
+    ctx.beginPath();
+    ctx.arc(x + armLen + lw - lw * 1.5, shoulderY + armLen * 0.5, lw * 1.5, -Math.PI * 0.5, Math.PI * 0.5, true);
+    ctx.stroke();
+  }
+
+  // === CHILD: small bow/ribbon on head ===
+  if (type === 'child') {
+    const bx = x + headR * scale * 0.6;
+    const by = headY - headR * scale * 0.5;
+    ctx.fillStyle = '#ff69b4';
+    ctx.beginPath();
+    ctx.moveTo(bx, by);
+    ctx.lineTo(bx - headR * 0.4, by - headR * 0.3);
+    ctx.lineTo(bx, by - headR * 0.1);
+    ctx.lineTo(bx + headR * 0.4, by - headR * 0.3);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+  }
+}
+
+function drawFigures() {
+  // Collect visible figures with projected positions
+  const visible = [];
+  for (const fig of allFigures) {
+    const relZ = fig.worldZ - state.trolleyX;
+    if (relZ < 5 || relZ > DRAW_DIST) continue;
+    const p = project(fig.worldX, relZ);
+    const figH = 40 * p.s;
+    if (figH < 2) continue;
+    visible.push({ ...fig, relZ, sx: p.x, sy: p.y, figH });
+  }
+  // Sort far-to-near (painter's algorithm)
+  visible.sort((a, b) => b.relZ - a.relZ);
+  for (const fig of visible) {
+    drawStickFigure(fig.sx, fig.sy, fig.figH, fig.type, fig.alive);
+  }
+}
+
+// ============================================================
+// TROLLEY (rear view, fixed screen position)
+// ============================================================
+function drawTrolleyRear(sx, sy) {
+  const w = 64, wTop = 50, h = 45;
+
+  // Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.beginPath();
+  ctx.moveTo(sx - wTop / 2 + 4, sy - h + 4);
+  ctx.lineTo(sx + wTop / 2 + 4, sy - h + 4);
+  ctx.lineTo(sx + w / 2 + 4, sy + 4);
+  ctx.lineTo(sx - w / 2 + 4, sy + 4);
+  ctx.closePath();
+  ctx.fill();
+
+  // Body (trapezoid, wider at bottom)
+  ctx.fillStyle = COL_TROLLEY;
+  ctx.beginPath();
+  ctx.moveTo(sx - wTop / 2, sy - h);
+  ctx.lineTo(sx + wTop / 2, sy - h);
+  ctx.lineTo(sx + w / 2, sy);
+  ctx.lineTo(sx - w / 2, sy);
+  ctx.closePath();
+  ctx.fill();
+
+  // Lower body darker
+  ctx.fillStyle = COL_TROLLEY_DK;
+  ctx.beginPath();
+  const midW = (wTop + w) / 4;
+  ctx.moveTo(sx - midW, sy - h * 0.45);
+  ctx.lineTo(sx + midW, sy - h * 0.45);
+  ctx.lineTo(sx + w / 2, sy);
+  ctx.lineTo(sx - w / 2, sy);
+  ctx.closePath();
+  ctx.fill();
+
+  // Roof
+  ctx.fillStyle = '#e74c3c';
+  ctx.fillRect(sx - wTop / 2 + 4, sy - h - 3, wTop - 8, 4);
+
+  // Back window
+  ctx.fillStyle = '#aed6f1';
+  const bwW = 26, bwH = 14;
+  ctx.fillRect(sx - bwW / 2, sy - h + 7, bwW, bwH);
+
+  // Window frame
+  ctx.strokeStyle = '#7f1d1d';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(sx - bwW / 2, sy - h + 7, bwW, bwH);
+
+  // Tail lights
+  ctx.fillStyle = '#ff3333';
+  ctx.fillRect(sx - w / 2 + 4, sy - 12, 8, 5);
+  ctx.fillRect(sx + w / 2 - 12, sy - 12, 8, 5);
+
+  // Bumper
+  ctx.fillStyle = '#666';
+  ctx.fillRect(sx - w / 2 + 2, sy - 2, w - 4, 4);
+
+  // Wheels (visible at sides)
+  ctx.fillStyle = '#222';
+  ctx.fillRect(sx - w / 2 - 3, sy - 8, 6, 10);
+  ctx.fillRect(sx + w / 2 - 3, sy - 8, 6, 10);
+}
+
+// ============================================================
+// UI OVERLAY
+// ============================================================
+function drawUI() {
+  const fi = state.currentForkIndex;
+  if (fi < DILEMMAS.length && state.forkPhase !== 'none') {
+    const dilemma = DILEMMAS[fi];
+
+    // Label background
+    ctx.font = 'bold 26px Arial, sans-serif';
+    const measured = ctx.measureText(dilemma.label).width;
+    const pad = 20;
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+    const boxW = Math.max(measured + pad * 2, 400);
+    ctx.fillRect(W / 2 - boxW / 2, 15, boxW, 85);
+
+    // Label text
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 4;
+    ctx.strokeText(dilemma.label, W / 2, 42);
+    ctx.fillStyle = '#FFD700';
+    ctx.fillText(dilemma.label, W / 2, 42);
+
+    // Option sub-labels
+    ctx.font = 'bold 18px Arial, sans-serif';
+    const leftText = '\u2190 ' + dilemma.left.desc;
+    const rightText = dilemma.right.desc + ' \u2192';
+    const leftX = W / 2 - 120;
+    const rightX = W / 2 + 120;
+    const optY = 75;
+
+    if (state.forkPhase === 'approach' || state.forkPhase === 'choosing') {
+      // Both options in white, equally prominent
+      ctx.fillStyle = '#fff';
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = 3;
+      ctx.strokeText(leftText, leftX, optY);
+      ctx.fillText(leftText, leftX, optY);
+      ctx.strokeText(rightText, rightX, optY);
+      ctx.fillText(rightText, rightX, optY);
+    } else if (state.forkPhase === 'committed') {
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = 3;
+
+      if (state.chosenTrack === 'both') {
+        // Both hit — show both in red
+        ctx.fillStyle = '#ff4444';
+        ctx.strokeText(leftText, leftX, optY);
+        ctx.fillText(leftText, leftX, optY);
+        ctx.strokeText(rightText, rightX, optY);
+        ctx.fillText(rightText, rightX, optY);
+        // Strike-through both
+        const lw = ctx.measureText(leftText).width;
+        const rw = ctx.measureText(rightText).width;
+        ctx.strokeStyle = '#ff4444';
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(leftX - lw / 2, optY); ctx.lineTo(leftX + lw / 2, optY); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(rightX - rw / 2, optY); ctx.lineTo(rightX + rw / 2, optY); ctx.stroke();
+      } else {
+        const chosenX = state.chosenTrack === 'left' ? leftX : rightX;
+        const chosenText = state.chosenTrack === 'left' ? leftText : rightText;
+        const otherX = state.chosenTrack === 'left' ? rightX : leftX;
+        const otherText = state.chosenTrack === 'left' ? rightText : leftText;
+
+        // Chosen option: bright red with circle highlight
+        ctx.fillStyle = '#ff4444';
+        ctx.strokeText(chosenText, chosenX, optY);
+        ctx.fillText(chosenText, chosenX, optY);
+        // Draw circle/rounded rect around chosen
+        const cw = ctx.measureText(chosenText).width;
+        ctx.strokeStyle = '#ff4444';
+        ctx.lineWidth = 3;
+        const pad = 8;
+        const rx = chosenX - cw / 2 - pad;
+        const ry = optY - 14;
+        const rw = cw + pad * 2;
+        const rh = 24;
+        ctx.beginPath();
+        if (ctx.roundRect) {
+          ctx.roundRect(rx, ry, rw, rh, 12);
+        } else {
+          ctx.rect(rx, ry, rw, rh);
+        }
+        ctx.stroke();
+
+        // Other option: dimmed, with checkmark (saved)
+        ctx.fillStyle = 'rgba(255,255,255,0.4)';
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 3;
+        ctx.strokeText(otherText, otherX, optY);
+        ctx.fillText(otherText, otherX, optY);
+      }
+    }
+  }
+
+  // Fork counter
+  ctx.font = '16px Arial, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'bottom';
+  ctx.fillStyle = '#fff';
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 3;
+  const counter = 'Dilemma ' + Math.min(fi + 1, DILEMMAS.length) + '/' + DILEMMAS.length;
+  ctx.strokeText(counter, 15, H - 15);
+  ctx.fillText(counter, 15, H - 15);
+
+  // Reset
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+}
+
+// ============================================================
+// LIGHTNING EFFECT (for 'both' punishment)
+// ============================================================
+function generateBolt(x1, y1, x2, y2) {
+  // Generate jagged lightning bolt points from (x1,y1) to (x2,y2)
+  const points = [{ x: x1, y: y1 }];
+  const segments = 8 + Math.floor(Math.random() * 5);
+  for (let i = 1; i < segments; i++) {
+    const t = i / segments;
+    const mx = lerp(x1, x2, t) + (Math.random() - 0.5) * 60;
+    const my = lerp(y1, y2, t) + (Math.random() - 0.5) * 20;
+    points.push({ x: mx, y: my });
+  }
+  points.push({ x: x2, y: y2 });
+  return points;
+}
+
+function spawnLightning() {
+  // Find where the figures are on screen for both tracks
+  const fi = state.currentForkIndex;
+  const pathsSeg = segments.find(s => s.type === 'paths' && s.forkIndex === fi);
+  if (!pathsSeg) return;
+  const midZ = (pathsSeg.xStart + pathsSeg.xEnd) / 2;
+  const relZ = midZ - state.trolleyX;
+
+  const leftTarget = project(-FORK_SPREAD, Math.max(30, relZ));
+  const rightTarget = project(FORK_SPREAD, Math.max(30, relZ));
+
+  const bolts = [];
+  // 2-3 bolts per side
+  for (let i = 0; i < 3; i++) {
+    bolts.push(generateBolt(
+      leftTarget.x + (Math.random() - 0.5) * 40, 0,
+      leftTarget.x + (Math.random() - 0.5) * 30, leftTarget.y
+    ));
+    bolts.push(generateBolt(
+      rightTarget.x + (Math.random() - 0.5) * 40, 0,
+      rightTarget.x + (Math.random() - 0.5) * 30, rightTarget.y
+    ));
+  }
+
+  state.lightning = {
+    startTime: performance.now(),
+    bolts,
+    duration: 800, // ms
+  };
+
+  // Lightning kills all figures on both tracks immediately
+  for (const fig of allFigures) {
+    if (fig.forkIndex === fi && fig.alive) {
+      fig.alive = false;
+    }
+  }
+}
+
+function drawLightning() {
+  if (!state.lightning) return;
+  const elapsed = performance.now() - state.lightning.startTime;
+  if (elapsed > state.lightning.duration) {
+    state.lightning = null;
+    return;
+  }
+
+  const t = elapsed / state.lightning.duration;
+  // Flicker: alternate between bright and dim rapidly
+  const flicker = Math.sin(elapsed * 0.05) > -0.3;
+  if (!flicker) return;
+
+  const alpha = 1 - t * t; // fade out
+
+  // Screen flash (brief white overlay)
+  if (t < 0.15) {
+    ctx.fillStyle = `rgba(255, 255, 255, ${0.4 * (1 - t / 0.15)})`;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.shadowColor = '#fff';
+  ctx.shadowBlur = 15;
+
+  for (const bolt of state.lightning.bolts) {
+    // Main bolt (thick, white-blue)
+    ctx.strokeStyle = '#e0e8ff';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(bolt[0].x, bolt[0].y);
+    for (let i = 1; i < bolt.length; i++) {
+      ctx.lineTo(bolt[i].x, bolt[i].y);
+    }
+    ctx.stroke();
+
+    // Bright core
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(bolt[0].x, bolt[0].y);
+    for (let i = 1; i < bolt.length; i++) {
+      ctx.lineTo(bolt[i].x, bolt[i].y);
+    }
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+// ============================================================
+// UPDATE
+// ============================================================
+function update() {
+  if (state.phase === 'menu') {
+    state.menuTrolleyX += 2.5;
+    if (state.menuTrolleyX > W + 100) state.menuTrolleyX = -100;
+    return;
+  }
+  if (state.phase !== 'playing') return;
+
+  // Speed escalation: ramp from SPEED_MIN to SPEED_MAX across dilemmas
+  const progress = state.currentForkIndex / Math.max(1, DILEMMAS.length - 1);
+  const targetSpeed = lerp(SPEED_MIN, SPEED_MAX, progress * progress); // quadratic ramp — late acceleration
+  state.trolleySpeed += (targetSpeed - state.trolleySpeed) * 0.01; // smooth transition
+
+  state.trolleyX += state.trolleySpeed;
+
+  // --- Fork phase state machine ---
+  const seg = getSegmentAt(state.trolleyX);
+  if (!seg) return;
+
+  if (seg.type === 'straight') {
+    if (state.forkPhase === 'none' && state.currentForkIndex < DILEMMAS.length) {
+      const splitSeg = segments.find(s => s.type === 'split' && s.forkIndex === state.currentForkIndex);
+      if (splitSeg) {
+        const dist = splitSeg.xStart - state.trolleyX;
+        if (dist > 0 && dist < STRAIGHT_LEN) {
+          state.forkPhase = 'approach';
+        }
+      }
+    }
+    if (state.forkPhase === 'committed') {
+      const mergeSeg = segments.find(s => s.type === 'merge' && s.forkIndex === state.currentForkIndex);
+      if (mergeSeg && state.trolleyX >= mergeSeg.xEnd) {
+        const d = DILEMMAS[state.currentForkIndex];
+        if (state.chosenTrack === 'both') {
+          state.choices.push({
+            dilemmaIndex: state.currentForkIndex,
+            chose: 'both',
+            killed: { desc: d.left.desc + ' AND ' + d.right.desc, count: d.left.count + d.right.count },
+            saved: { desc: 'nobody', count: 0 },
+          });
+        } else {
+          const killed = d[state.chosenTrack];
+          const savedSide = state.chosenTrack === 'left' ? 'right' : 'left';
+          state.choices.push({
+            dilemmaIndex: state.currentForkIndex,
+            chose: state.chosenTrack,
+            killed,
+            saved: d[savedSide],
+          });
+        }
+        state.currentForkIndex++;
+        state.chosenTrack = null;
+        state.forkPhase = 'none';
+      }
+    }
+  } else if (seg.type === 'split') {
+    if (state.forkPhase === 'approach') state.forkPhase = 'choosing';
+  } else if (seg.type === 'paths') {
+    // Once the tracks have fully split, no more choosing — too late!
+    if (!state.chosenTrack && (state.forkPhase === 'choosing' || state.forkPhase === 'approach')) {
+      state.chosenTrack = 'both';  // didn't choose — hit everyone
+      state.forkPhase = 'committed';
+      spawnLightning();
+    }
+  }
+
+  // Compute trolley lateral position at the visual z (trolley renders at z=35 from camera)
+  state.trolleyLateral = getTrolleyLateralAt(state.trolleyX + 35, state.chosenTrack);
+
+  // --- Collision detection: mark figures as dead AHEAD of trolley ---
+  if (state.chosenTrack && state.forkPhase === 'committed') {
+    for (const fig of allFigures) {
+      if (!fig.alive) continue;
+      if (fig.forkIndex !== state.currentForkIndex) continue;
+      const dist = fig.worldZ - state.trolleyX;
+      // Kill figures when trolley is ~120 units away (still very visible)
+      if (dist < 120 && dist > -50) {
+        if (state.chosenTrack === 'both' || fig.side === state.chosenTrack) {
+          fig.alive = false;
+        }
+      }
+    }
+  }
+
+  // Transition to summary once all forks are done
+  if (state.currentForkIndex >= DILEMMAS.length && state.forkPhase === 'none') {
+    state.trolleySpeed = Math.max(0, state.trolleySpeed - 0.15);
+    if (state.trolleySpeed <= 0) {
+      state.phase = 'summary';
+    }
+  }
+}
+
+// ============================================================
+// RENDER
+// ============================================================
+function render() {
+  ctx.clearRect(0, 0, W, H);
+
+  if (state.phase === 'menu') {
+    drawMenu();
+    return;
+  }
+  if (state.phase === 'summary') {
+    drawSummary();
+    return;
+  }
+
+  // 1. Sky + hills
+  drawBackground();
+
+  // 2. Road (pseudo-3D strips)
+  drawRoad();
+
+  // 3. Stick figures
+  drawFigures();
+
+  // 3.5. Lightning effect (for 'both' punishment)
+  drawLightning();
+
+  // 4. Trolley (rear view, fixed near bottom)
+  const trolleySY = H - 75;
+  // Match the road projection: trolley is visually at ~z=35 from camera
+  const trolleySX = W / 2 + state.trolleyLateral * FOCAL / 35;
+  drawTrolleyRear(trolleySX, trolleySY);
+
+  // 5. UI
+  drawUI();
+}
+
+// ============================================================
+// MENU SCREEN
+// ============================================================
+function drawMenu() {
+  // Dark background with subtle vignette
+  ctx.fillStyle = '#0a0a0a';
+  ctx.fillRect(0, 0, W, H);
+
+  // Animated track lines across middle
+  const trackY = H * 0.55;
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 2;
+  // Rails
+  ctx.beginPath(); ctx.moveTo(0, trackY - 6); ctx.lineTo(W, trackY - 6); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, trackY + 6); ctx.lineTo(W, trackY + 6); ctx.stroke();
+  // Ties
+  ctx.strokeStyle = '#2a2a2a';
+  ctx.lineWidth = 3;
+  for (let tx = (state.menuTrolleyX * 0.5) % 20 - 20; tx < W + 20; tx += 20) {
+    ctx.beginPath(); ctx.moveTo(tx, trackY - 10); ctx.lineTo(tx, trackY + 10); ctx.stroke();
+  }
+  // Rails brighter
+  ctx.strokeStyle = '#555';
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(0, trackY - 6); ctx.lineTo(W, trackY - 6); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, trackY + 6); ctx.lineTo(W, trackY + 6); ctx.stroke();
+
+  // Animated trolley rolling across
+  const mx = state.menuTrolleyX;
+  const my = trackY;
+  // Shadow
+  ctx.fillStyle = 'rgba(200,50,30,0.15)';
+  ctx.fillRect(mx - 30, my - 28, 64, 32);
+  // Body
+  ctx.fillStyle = COL_TROLLEY;
+  ctx.fillRect(mx - 28, my - 26, 56, 22);
+  ctx.fillStyle = COL_TROLLEY_DK;
+  ctx.fillRect(mx - 28, my - 14, 56, 10);
+  // Roof
+  ctx.fillStyle = '#e74c3c';
+  ctx.fillRect(mx - 22, my - 29, 44, 4);
+  // Window
+  ctx.fillStyle = '#aed6f1';
+  ctx.fillRect(mx - 10, my - 23, 20, 10);
+  // Wheels
+  ctx.fillStyle = '#222';
+  const wheelR = 5;
+  const wheelAngle = state.menuTrolleyX * 0.15;
+  for (const wx of [mx - 18, mx + 18]) {
+    ctx.beginPath(); ctx.arc(wx, my, wheelR, 0, Math.PI * 2); ctx.fill();
+    // Spoke
+    ctx.strokeStyle = '#555';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(wx + Math.cos(wheelAngle) * wheelR * 0.7, my + Math.sin(wheelAngle) * wheelR * 0.7);
+    ctx.lineTo(wx - Math.cos(wheelAngle) * wheelR * 0.7, my - Math.sin(wheelAngle) * wheelR * 0.7);
+    ctx.stroke();
+  }
+
+  // Stick figures waiting ahead of trolley (some on the track, doomed)
+  const figBaseX = mx + 120;
+  if (figBaseX < W + 50 && figBaseX > -50) {
+    ctx.strokeStyle = '#fff';
+    ctx.fillStyle = '#fff';
+    ctx.lineWidth = 1.5;
+    // 3 little figures standing on the track
+    for (let i = 0; i < 3; i++) {
+      const fx = figBaseX + i * 15;
+      const fy = trackY;
+      const fh = 20;
+      const hr = 3;
+      ctx.beginPath(); ctx.arc(fx, fy - fh + hr, hr, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(fx, fy - fh + hr * 2); ctx.lineTo(fx, fy - fh * 0.35); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(fx - 5, fy - fh * 0.55); ctx.lineTo(fx, fy - fh * 0.65); ctx.lineTo(fx + 5, fy - fh * 0.55); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(fx - 4, fy); ctx.lineTo(fx, fy - fh * 0.35); ctx.lineTo(fx + 4, fy); ctx.stroke();
+    }
+  }
+
+  // Title
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // Title shadow
+  ctx.font = 'bold 48px Arial, sans-serif';
+  ctx.fillStyle = '#300';
+  ctx.fillText('TROLLEY PROBLEM', W / 2 + 2, H * 0.18 + 2);
+  ctx.fillText('THE GAME', W / 2 + 2, H * 0.28 + 2);
+
+  // Title main
+  ctx.fillStyle = '#c0392b';
+  ctx.fillText('TROLLEY PROBLEM', W / 2, H * 0.18);
+  ctx.font = 'bold 52px Arial, sans-serif';
+  ctx.fillStyle = '#FFD700';
+  ctx.fillText('THE GAME', W / 2, H * 0.28);
+
+  // Subtitle
+  ctx.font = 'italic 16px Arial, sans-serif';
+  ctx.fillStyle = '#666';
+  ctx.fillText('"No one gets off this ride with clean hands."', W / 2, H * 0.37);
+
+  // Instructions
+  ctx.font = '15px Arial, sans-serif';
+  ctx.fillStyle = '#888';
+  ctx.fillText('\u2190 LEFT / RIGHT \u2192  to choose who lives and who... doesn\'t', W / 2, H * 0.72);
+
+  // Start prompt (blinking)
+  ctx.font = 'bold 22px Arial, sans-serif';
+  const blink = Math.sin(performance.now() * 0.004) > 0;
+  ctx.fillStyle = blink ? '#FFD700' : '#665500';
+  ctx.fillText('Press any key to begin your moral descent', W / 2, H * 0.85);
+
+  // Dilemma count teaser
+  ctx.font = '12px Arial, sans-serif';
+  ctx.fillStyle = '#444';
+  ctx.fillText(DILEMMAS.length + ' dilemmas. 0 good answers.', W / 2, H * 0.93);
+}
+
+// ============================================================
+// SUMMARY SCREEN
+// ============================================================
+function drawSummary() {
+  // Dark background
+  ctx.fillStyle = '#111';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, 0, W, H);
+  ctx.clip();
+  ctx.translate(0, -state.summaryScroll);
+
+  let yPos = 40;
+  const leftMargin = 60;
+  const contentW = W - leftMargin * 2;
+
+  // Title
+  ctx.font = 'bold 32px Arial, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = '#FFD700';
+  ctx.fillText('YOUR MORAL REPORT CARD', W / 2, yPos);
+  yPos += 50;
+
+  // Divider
+  ctx.strokeStyle = '#444';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(leftMargin, yPos); ctx.lineTo(W - leftMargin, yPos); ctx.stroke();
+  yPos += 20;
+
+  // Body count
+  let totalKilled = 0;
+  let totalSaved = 0;
+  for (const c of state.choices) {
+    totalKilled += c.killed.count;
+    totalSaved += c.saved.count;
+  }
+
+  ctx.font = 'bold 20px Arial, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ff4444';
+  ctx.fillText('Total Body Count: ' + totalKilled, W / 2 - 120, yPos);
+  ctx.fillStyle = '#44ff44';
+  ctx.fillText('Saved: ' + totalSaved, W / 2 + 140, yPos);
+  yPos += 40;
+
+  // Ethical profile
+  const tagCounts = { utilitarian: 0, deontological: 0, contractualist: 0, evil: 0 };
+  for (const c of state.choices) {
+    const dilemma = DILEMMAS[c.dilemmaIndex];
+    if (!dilemma) continue;
+    // Classify based on which side was chosen
+    let choiceTag;
+    if (c.chose === 'both') {
+      choiceTag = 'evil'; // indecision kills everyone
+    } else {
+      choiceTag = dilemma.tags[c.chose];
+    }
+    if (choiceTag) {
+      tagCounts[choiceTag] = (tagCounts[choiceTag] || 0) + 1;
+    }
+  }
+  const totalTagged = Math.max(1, Object.values(tagCounts).reduce((a, b) => a + b, 0));
+  const pcts = {};
+  for (const tag in tagCounts) {
+    pcts[tag] = Math.round((tagCounts[tag] / totalTagged) * 100);
+  }
+  // Fix rounding to sum to 100
+  const pctSum = Object.values(pcts).reduce((a, b) => a + b, 0);
+  if (pctSum !== 100) {
+    const maxTag = Object.keys(pcts).reduce((a, b) => pcts[a] >= pcts[b] ? a : b);
+    pcts[maxTag] += 100 - pctSum;
+  }
+
+  ctx.font = 'bold 18px Arial, sans-serif';
+  ctx.fillStyle = '#aaa';
+  ctx.fillText('YOUR ETHICAL PROFILE', W / 2, yPos);
+  yPos += 30;
+
+  // Profile bars
+  const tagColors = { utilitarian: '#3498db', deontological: '#9b59b6', contractualist: '#2ecc71', evil: '#e74c3c' };
+  const tagLabels = { utilitarian: 'Utilitarian', deontological: 'Deontologist', contractualist: 'Contractualist', evil: 'Evil' };
+  const barW = 300;
+  const barH = 22;
+  const barX = W / 2 - barW / 2;
+
+  for (const tag of ['utilitarian', 'deontological', 'contractualist', 'evil']) {
+    // Label
+    ctx.font = '14px Arial, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillStyle = tagColors[tag];
+    ctx.fillText(tagLabels[tag], barX - 10, yPos + barH / 2 + 5);
+    // Bar background
+    ctx.fillStyle = '#333';
+    ctx.fillRect(barX, yPos, barW, barH);
+    // Bar fill
+    ctx.fillStyle = tagColors[tag];
+    ctx.fillRect(barX, yPos, barW * (pcts[tag] / 100), barH);
+    // Percentage text
+    ctx.font = 'bold 13px Arial, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#fff';
+    ctx.fillText(pcts[tag] + '%', barX + barW + 10, yPos + barH / 2 + 5);
+    yPos += barH + 8;
+  }
+  yPos += 15;
+
+  // Dominant alignment title
+  const dominant = Object.keys(pcts).reduce((a, b) => pcts[a] >= pcts[b] ? a : b);
+  const titles = {
+    utilitarian: 'The Cold Calculator',
+    deontological: 'The Rule Follower',
+    contractualist: 'The Social Contract Enthusiast',
+    evil: 'Genuinely Terrible Person',
+  };
+  ctx.font = 'bold 22px Arial, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = tagColors[dominant];
+  ctx.fillText('"' + titles[dominant] + '"', W / 2, yPos);
+  yPos += 40;
+
+  // Divider
+  ctx.strokeStyle = '#444';
+  ctx.beginPath(); ctx.moveTo(leftMargin, yPos); ctx.lineTo(W - leftMargin, yPos); ctx.stroke();
+  yPos += 20;
+
+  // Choice-by-choice breakdown
+  ctx.font = 'bold 16px Arial, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#aaa';
+  ctx.fillText('CHOICE BY CHOICE', W / 2, yPos);
+  yPos += 25;
+
+  for (let i = 0; i < state.choices.length; i++) {
+    const c = state.choices[i];
+    const dilemma = DILEMMAS[c.dilemmaIndex];
+
+    // Dilemma label
+    ctx.font = 'bold 15px Arial, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#FFD700';
+    ctx.fillText((i + 1) + '. ' + dilemma.label, leftMargin, yPos);
+    yPos += 20;
+
+    // Choice made
+    ctx.font = '14px Arial, sans-serif';
+    if (c.chose === 'both') {
+      ctx.fillStyle = '#ff4444';
+      ctx.fillText('   You chose: NOBODY (lightning killed everyone)', leftMargin + 10, yPos);
+    } else {
+      ctx.fillStyle = '#ff8844';
+      ctx.fillText('   Killed: ' + c.killed.desc + '  |  Saved: ' + c.saved.desc, leftMargin + 10, yPos);
+    }
+    yPos += 20;
+
+    // Sarcastic commentary
+    ctx.font = 'italic 13px Arial, sans-serif';
+    ctx.fillStyle = '#888';
+    let comment;
+    if (c.chose === 'both') {
+      comment = '"' + (dilemma.indecision || 'Indecision is also a choice. A terrible one.') + '"';
+    } else {
+      comment = '"' + (dilemma.commentary[c.chose] || 'No comment.') + '"';
+    }
+    ctx.fillText('   ' + comment, leftMargin + 10, yPos);
+    yPos += 28;
+  }
+
+  yPos += 20;
+
+  // Restart prompt
+  ctx.font = 'bold 24px Arial, sans-serif';
+  ctx.textAlign = 'center';
+  const blink = Math.sin(performance.now() * 0.004) > 0;
+  ctx.fillStyle = blink ? '#FFD700' : '#aa8800';
+  ctx.fillText('Press R to Ride Again', W / 2, yPos);
+  yPos += 60;
+
+  // Track max scroll
+  state.summaryMaxScroll = Math.max(0, yPos - H + 20);
+
+  ctx.restore();
+
+  // Scroll indicator if content overflows
+  if (state.summaryMaxScroll > 0) {
+    ctx.font = '12px Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#555';
+    if (state.summaryScroll < state.summaryMaxScroll) {
+      ctx.fillText('scroll down for more', W / 2, H - 10);
+    }
+  }
+}
+
+// ============================================================
+// INIT & GAME LOOP
+// ============================================================
+buildTrackSegments();
+buildFigures();
+
+function gameLoop() {
+  requestAnimationFrame(gameLoop);
+  update();
+  render();
+}
+gameLoop();
+</script>
+</body>
+</html>
