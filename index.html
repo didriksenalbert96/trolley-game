@@ -770,6 +770,41 @@ document.addEventListener('wheel', (e) => {
   }
 });
 
+// Touch/click support (mobile + mouse)
+function getCanvasX(e) {
+  const rect = canvas.getBoundingClientRect();
+  const clientX = e.changedTouches ? e.changedTouches[0].clientX : e.clientX;
+  return (clientX - rect.left) / rect.width; // 0..1
+}
+
+function handleTap(e) {
+  e.preventDefault();
+  const xRatio = getCanvasX(e);
+
+  if (state.phase === 'menu') {
+    state.phase = 'playing';
+    state.trolleySpeed = SPEED_MIN;
+    return;
+  }
+  if (state.phase === 'summary') {
+    restartGame();
+    return;
+  }
+  if (state.phase !== 'playing') return;
+  if (state.forkPhase === 'approach' || state.forkPhase === 'choosing') {
+    if (xRatio < 0.5) {
+      state.chosenTrack = 'left';
+      state.forkPhase = 'committed';
+    } else {
+      state.chosenTrack = 'right';
+      state.forkPhase = 'committed';
+    }
+  }
+}
+
+canvas.addEventListener('click', handleTap);
+canvas.addEventListener('touchend', handleTap);
+
 function restartGame() {
   DILEMMAS = selectDilemmas(); // re-roll dilemmas each playthrough
   state.phase = 'menu';
@@ -1775,13 +1810,13 @@ function drawMenu() {
   // Instructions
   ctx.font = '15px Arial, sans-serif';
   ctx.fillStyle = '#888';
-  ctx.fillText('\u2190 LEFT / RIGHT \u2192  to choose who lives and who... doesn\'t', W / 2, H * 0.72);
+  ctx.fillText('\u2190 LEFT / RIGHT \u2192  or tap either side to choose', W / 2, H * 0.72);
 
   // Start prompt (blinking)
   ctx.font = 'bold 22px Arial, sans-serif';
   const blink = Math.sin(performance.now() * 0.004) > 0;
   ctx.fillStyle = blink ? '#FFD700' : '#665500';
-  ctx.fillText('Press any key to begin your moral descent', W / 2, H * 0.85);
+  ctx.fillText('Press any key or tap to begin your moral descent', W / 2, H * 0.85);
 
   // Dilemma count teaser
   ctx.font = '12px Arial, sans-serif';
@@ -1966,7 +2001,7 @@ function drawSummary() {
   ctx.textAlign = 'center';
   const blink = Math.sin(performance.now() * 0.004) > 0;
   ctx.fillStyle = blink ? '#FFD700' : '#aa8800';
-  ctx.fillText('Press R to Ride Again', W / 2, yPos);
+  ctx.fillText('Press R or Tap to Ride Again', W / 2, yPos);
   yPos += 60;
 
   // Track max scroll
